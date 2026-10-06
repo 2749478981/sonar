@@ -17,8 +17,8 @@ IDR_ASSETS RCDATA "assets.zip"
 IDI_APP ICON DISCARDABLE "WeaponSoundEnhanceGUI.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION    2,37,2,0
- PRODUCTVERSION 2,37,2,0
+ FILEVERSION    2,37,3,0
+ PRODUCTVERSION 2,37,3,0
  FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
  FILEFLAGS      0
  FILEOS         VOS_NT_WINDOWS32
@@ -31,11 +31,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Sonar"
             VALUE "FileDescription",  "Sonar - config tool"
-            VALUE "FileVersion",      "2.37.2.0"
+            VALUE "FileVersion",      "2.37.3.0"
             VALUE "InternalName",     "WeaponSoundEnhanceGUI"
             VALUE "OriginalFilename", "WeaponSoundEnhanceGUI.exe"
             VALUE "ProductName",      "Sonar"
-            VALUE "ProductVersion",   "2.37.2.0"
+            VALUE "ProductVersion",   "2.37.3.0"
             VALUE "LegalCopyright",   "MIT License"
         END
     END

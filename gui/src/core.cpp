@@ -4504,6 +4504,17 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                         std::string rel = name.substr(kPlug.size());
                         if (rel.find('/') != std::string::npos) continue;   // plugins\ 下只放 DLL
                         dst = pluginsDir + rel;
+                    } else if (name == "WeaponSoundEnhance.dll") {
+                        // 旧包结构兜底：zip 根就是 plugins\ 的内容（早期从 plugins\ 开始打包的版本）
+                        dst = pluginsDir + "WeaponSoundEnhance.dll";
+                    } else if (name.rfind("WeaponSoundEnhance/", 0) == 0) {
+                        std::string rel = name.substr(std::strlen("WeaponSoundEnhance/"));
+                        if (rel == "WeaponSoundEnhance.ini") continue;   // 旧包不带 ini
+                        if (rel == "WeaponSoundEnhanceGUI.exe") {
+                            isGuiExe = true;
+                            rel = "WeaponSoundEnhanceGUI.new.exe";
+                        }
+                        dst = dataDir + rel;
                     } else {
                         continue;                                          // 其它路径忽略
                     }
@@ -4523,10 +4534,15 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
 
                 imp->updNeedRestart.store(needRestart);
                 imp->updInstalling.store(false);
-                if (failed > 0 && done == 0) {
+                if (done == 0) {
+                    // ★ 一个文件都没装成功不能算成功（以前会显示"已更新 0 个文件"并当作最新，
+                    //   把"包里结构不认"这类问题藏起来了）。
                     std::lock_guard<std::mutex> lk(imp->updMx);
-                    imp->updMsg = "安装失败：文件被占用（游戏/GUI 正在运行？）。可关掉游戏后重试。";
-                    imp->updState.store(3);
+                    imp->updMsg = (failed > 0)
+                        ? std::string("安装失败：文件被占用（游戏/GUI 正在运行？）。可关掉游戏后重试。")
+                        : std::string("安装包结构不认识（没有任何文件被写入）。请到发布页手动下载覆盖。");
+                    imp->updProgress.store(-1);
+                    imp->updState.store(4);
                     return;
                 }
                 {
@@ -4538,7 +4554,6 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 imp->updProgress.store(-1);
                 imp->updState.store(2);   // 装完就等于最新了
                 if (needRestart) {
-                    // 写一个重启脚本：等 GUI 退出 → 替换 exe → 重新启动
                     const std::string cmdPath = dataDir + "_wse_apply_update.cmd";
                     std::string cmd =
                         "@echo off\r\n"

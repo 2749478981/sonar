@@ -58,10 +58,9 @@
 ## 1. 安装
 
 1. 确保游戏已装好加载前置（**Stracker's Loader** / 狩技 mod 盒子等）。
-2. 把发布包解压到游戏的 `nativePC\plugins\`，形成：
+2. 把发布包**解压到游戏根目录**（包里已经带好 `nativePC\plugins\` 结构，直接解压即可）：
 
-```
-Monster Hunter World\
+Monster Hunter World\                    ← 解压到这里
 └─ nativePC\
    └─ plugins\
       ├─ WeaponSoundEnhance.dll          ← 插件本体
