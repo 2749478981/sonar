@@ -1042,6 +1042,85 @@ function fillComboSelect() {
   sel.onchange = () => e.combo = sel.value;
 }
 
+/* ===========================================================================
+   判定预设：把"造成伤害 / 登龙 / 大居 / 真蓄"这些常用判定，一键填成
+   **真正的条件 + 判定窗口参数**。
+
+   为什么需要它：以前这个下拉只改 judgePreset 并显示一句提示，**不会生成任何条件**，
+   于是"选了造成伤害"等于没选（没有条件 → 后端还会把判定窗口清零 → 变成普通条目），
+   用户配完发现"判定没生效"。
+   =========================================================================== */
+const JUDGE_PRESET_DEFS = {
+  // 通用：打出伤害就播命中，没打中在窗口结束时播落空
+  1: { delay: 0, timeout: 2500, offset: 150, endOnAction: true, checkMode: 0,
+       conds: [ { expr: 'dmg>0', atEnd: false, hint: '命中' },
+                { expr: 'dmg==0', atEnd: true, hint: '落空' } ] },
+  // 太刀 · 登龙：伤害在落地那一下，窗口给宽一点
+  2: { delay: 0, timeout: 3000, offset: 150, endOnAction: true, checkMode: 0,
+       conds: [ { expr: 'dmg>0', atEnd: false, hint: '命中' },
+                { expr: 'dmg==0', atEnd: true, hint: '落空' } ] },
+  // 太刀 · 大居：成功 = 打出伤害且不掉刃（可能被推翻，所以窗口结束才评）
+  3: { delay: 0, timeout: 3000, offset: 150, endOnAction: true, checkMode: 1,
+       conds: [ { expr: 'dmg>0 & dAura>=0', atEnd: true, hint: '成功' },
+                { expr: 'dAura<0 | dmg==0', atEnd: true, hint: '失败' } ] },
+  // 大剑 · 真蓄：两段伤害，判定起点卡在中间（1200ms）
+  4: { delay: 1200, timeout: 3500, offset: 150, endOnAction: true, checkMode: 0,
+       conds: [ { expr: 'dmg>0', atEnd: false, hint: '命中' },
+                { expr: 'dmg==0', atEnd: true, hint: '落空' } ] },
+};
+
+// 按预设填充条件与窗口参数（会重写现有条件，调用前先让用户确认）
+function applyJudgePreset() {
+  const e = ED.draft;
+  const n = e.judgePreset || 0;
+  const d = JUDGE_PRESET_DEFS[n];
+  if (!d) {
+    toast(n === 5 ? '「自定义」不需要填充：请自己点「＋ 添加条件」写表达式'
+                  : '「不判定」没有预设：动作一匹配就播', 'ok');
+    return;
+  }
+  e.checkDelayMs = d.delay;
+  e.checkTimeoutMs = d.timeout;
+  e.checkOffsetMs = d.offset;
+  e.endOnAction = d.endOnAction;
+  e.checkMode = d.checkMode;
+  // 保留同名表达式上已有的音效（避免用户配好的音频被清掉）
+  const old = {};
+  (e.conds || []).forEach(c => { old[c.expr] = c.pool || []; });
+  e.conds = d.conds.map(c => ({
+    expr: c.expr,
+    atEnd: !!c.atEnd,
+    pool: old[c.expr] || [],
+  }));
+  ED.judgeBox = true;
+  $('#edAdvanced').checked = true;
+  $('#edJudgeBox').hidden = false;
+  $('#edDelay').value = e.checkDelayMs;
+  $('#edTimeout').value = e.checkTimeoutMs;
+  $('#edOffset').value = e.checkOffsetMs;
+  $('#edEndOnAction').checked = !!e.endOnAction;
+  $('#edFinalMode').checked = e.checkMode === 1;
+  fillConds();
+  judgeNote();
+  toast(`已按预设填好 ${e.conds.length} 条条件：请给每条条件「浏览… 选音效」加上音效（没加音效的条件会被丢弃）`, 'ok');
+}
+
+// 判定区提示：预设说明 + 场景提醒（伤害类条件需要任务/目标怪物）
+function judgeSceneWarn() {
+  const L = ST.live || {};
+  // 只在"已连接且已进场景"时才谈信号可用性；游戏没开时别乱报
+  if (!L.attached || !L.inScene) return '';
+  const sig = L.dmgSignal;   // 插件上报：quest=任务伤害可用 / hp=怪物血量可用 / none=都读不到
+  if (sig === 'none') {
+    const why = (L.mapId === 504) ? '训练场里木桩不算怪物、也没有任务累计伤害'
+      : (L.questState !== 2 ? '当前不在任务中' : '没有可读的目标怪物');
+    return '⚠ 伤害信号：读不到（' + why + '）—— dmg>0 这类条件不会成立，' +
+           '判定会在窗口结束时走「默认音效」。请进任务、锁定目标怪物后再测。';
+  }
+  if (sig === 'quest') return '伤害信号：任务累计伤害 ✓（判定可用）';
+  if (sig === 'hp')    return '伤害信号：怪物血量 ✓（判定可用；任务伤害读不到时用血量兜底）';
+  return '';
+}
 function judgeNote() {
   const j = ED.draft.judgePreset || 0;
   const notes = {
@@ -1050,8 +1129,11 @@ function judgeNote() {
     3: '大居成功需要打出伤害且不掉刃，所以在窗口结束时判定。',
     4: '真蓄两段：第一段约 0.65 秒、伤害小，第二段约 1.7~2.1 秒、伤害大。判定起点设在 1200ms 卡在两段中间。',
   };
-  $('#edJudgeNote').textContent = j >= 1 && j <= 4 ? notes[j]
-    : (j === 5 ? '自己写条件表达式，例如 dmg>0 & dAura>=0' : '动作一匹配就播，不做判定。');
+  const warn = judgeSceneWarn();
+  $('#edJudgeNote').textContent = (j >= 1 && j <= 4 ? notes[j]
+    : (j === 5 ? '自己写条件表达式，例如 dmg>0 & dAura>=0' : '动作一匹配就播，不做判定。'))
+    + (j >= 1 && j <= 4 ? '（要真正生效，请点右侧「按预设填充条件」）' : '')
+    + (warn ? '\n' + warn : '');
 }
 
 /* ---- 音效卡片（普通池 / 刃时池 / 判定池共用同一套控件）---- */
@@ -1203,6 +1285,16 @@ function fillConds() {
 
 async function saveEditor() {
   const e = ED.draft;
+  // ★ 条件没有音效会被后端丢弃（空音效池的条件没有意义）→ 先提醒，别让用户白配
+  const emptyConds = (e.conds || []).filter(c => !(c.pool && c.pool.length));
+  if (emptyConds.length) {
+    const names = emptyConds.map(c => c.expr || '(空表达式)').join('、');
+    const go = await confirmBox({
+      title: '有条件的音效是空的', danger: true, okText: '仍然保存',
+      message: `这些条件还没有加音效：${names}\n保存后它们会被丢弃（判定窗口也会跟着失效）。\n给条件加音效：展开「判定时间与条件」→ 条件下面点「浏览… 选音效」。`,
+    });
+    if (!go) return;
+  }
   if (!e.name) e.name = (e.fsmId >= 0 ? 'FSM ' + e.fsmId : '条目');
   if (e.weaponType < 0) e.combo = '';
   try {
@@ -1605,6 +1697,7 @@ const ACTIONS = {
   'ed.close':  () => { $('#editor').classList.remove('open'); ED.open = false; },
   'ed.cancel': () => { $('#editor').classList.remove('open'); ED.open = false; },
   'ed.ok':     () => saveEditor(),
+  'ed.applyJudge': () => { applyJudgePreset(); },
   'ed.addCond': () => {
     ED.draft.conds = ED.draft.conds || [];
     ED.draft.conds.push({ expr: 'dmg>0', atEnd: false, pool: [] });

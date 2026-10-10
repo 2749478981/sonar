@@ -3037,14 +3037,22 @@ DWORD WINAPI WorkerProc(LPVOID)
         HandleGuiRequests();   // GUI 按钮写的标记文件 → 立即重载 / 停止音效
         DumpLayerProbe();      // layer 探针（ini LayerProbe=1 时）：wem 事件后 dump 实体差异
 
-        // 场景小文件（GUI 捕获面板显示当前场景）：地图或任务状态变化时写
+        // 场景小文件（GUI 捕获面板显示当前场景；顺便给"判定信号可用性"）：
+        //   mapId / questState / 任务累计伤害 / 怪物血量 / 血量上限
+        //   GUI 靠后三个判断"伤害类判定现在能不能生效"（训练场/非任务读不到伤害）。
         {
             static int s_lastMap = -999, s_lastQuest = -999;
-            if (player::gMapId != s_lastMap || player::gQuestState != s_lastQuest) {
+            static std::uint64_t s_lastSceneWrite = 0;
+            const std::uint64_t nowScene = ::GetTickCount64();
+            if (player::gMapId != s_lastMap || player::gQuestState != s_lastQuest ||
+                nowScene - s_lastSceneWrite >= 1000) {
                 s_lastMap = player::gMapId;
                 s_lastQuest = player::gQuestState;
-                char buf[64] = {};
-                _snprintf_s(buf, _TRUNCATE, "%d\n%d", player::gMapId, player::gQuestState);
+                s_lastSceneWrite = nowScene;
+                char buf[192] = {};
+                _snprintf_s(buf, _TRUNCATE, "%d\n%d\n%d\n%.1f\n%.1f",
+                            player::gMapId, player::gQuestState,
+                            player::gQuestDmg, player::gMonHp, player::gMonHpMax);
                 FILE* f = nullptr;
                 if (_wfopen_s(&f, (gModuleDir + L"SonarScene.txt").c_str(), L"wb") == 0 && f) {
                     fwrite(buf, 1, strlen(buf), f);

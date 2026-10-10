@@ -526,6 +526,9 @@ std::wstring LongPathW(const std::string& utf8) {
 // 当前场景（DLL 写 plugins\SonarScene.txt：mapId\nquestState；GUI 1s 缓存读取）
 static int g_sceneMapId = -1;
 static int g_sceneQuestState = -1;
+    int   g_sceneQuestDmg = -1;   // 场景文件里的"任务累计伤害"（-1 = 读不到）
+    float g_sceneMonHp = -1.0f;   // 怪物血量（-1 = 读不到）
+    float g_sceneMonHpMax = -1.0f;
 
 std::string ExeDir() {
     // 用动态缓冲：GetModuleFileNameW 在路径超 MAX_PATH 时返回 0，旧版固定
@@ -2402,15 +2405,41 @@ struct Core::Impl {
                 if (!s_mapFileDir.empty()) {
                     std::string t;
                     if (FsRead(s_mapFileDir + "SonarScene.txt", t)) {
-                        const std::size_t nl = t.find('\n');
-                        g_sceneMapId = std::atoi(t.substr(0, nl).c_str());
-                        g_sceneQuestState = (nl == std::string::npos) ? -1
-                            : std::atoi(t.substr(nl + 1).c_str());
-                    } else { g_sceneMapId = -1; g_sceneQuestState = -1; }
+                        // 行：mapId / questState / 任务累计伤害 / 怪物血量 / 血量上限
+                        //（后三行是新增的；老 DLL 只写两行 → 解析不到就当"读不到"）
+                        std::vector<std::string> ln;
+                        {
+                            std::size_t p0 = 0;
+                            while (p0 <= t.size()) {
+                                std::size_t e = t.find('\n', p0);
+                                if (e == std::string::npos) e = t.size();
+                                ln.push_back(t.substr(p0, e - p0));
+                                if (e == t.size()) break;
+                                p0 = e + 1;
+                            }
+                        }
+                        g_sceneMapId      = ln.size() > 0 ? std::atoi(ln[0].c_str()) : -1;
+                        g_sceneQuestState = ln.size() > 1 ? std::atoi(ln[1].c_str()) : -1;
+                        g_sceneQuestDmg   = ln.size() > 2 ? std::atoi(ln[2].c_str()) : -1;
+                        g_sceneMonHp      = ln.size() > 3 ? (float)std::atof(ln[3].c_str()) : -1.0f;
+                        g_sceneMonHpMax   = ln.size() > 4 ? (float)std::atof(ln[4].c_str()) : -1.0f;
+                    } else {
+                        g_sceneMapId = -1; g_sceneQuestState = -1;
+                        g_sceneQuestDmg = -1; g_sceneMonHp = -1.0f; g_sceneMonHpMax = -1.0f;
+                    }
                 }
             }
             d.set("mapId", JVal(g_sceneMapId));
             d.set("questState", JVal(g_sceneQuestState));
+            // 判定信号可用性：伤害类条件（dmg>0）需要"任务累计伤害"或"怪物血量"至少一路可读
+            {
+                const bool questOk = (g_sceneQuestDmg >= 0);
+                const bool hpOk = (g_sceneMonHp >= 0.0f && g_sceneMonHpMax >= 10.0f);
+                d.set("questDmg", JVal(g_sceneQuestDmg));
+                d.set("monHp", JVal((double)g_sceneMonHp));
+                d.set("monHpMax", JVal((double)g_sceneMonHpMax));
+                d.set("dmgSignal", JVal(std::string(questOk ? "quest" : (hpOk ? "hp" : "none"))));
+            }
         }
         {
             const std::unordered_map<int, std::pair<std::string, int>>::const_iterator sit =
