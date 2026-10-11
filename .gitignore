@@ -60,3 +60,7 @@ ref/RingingBloom/
 tools/sound2wem/ffmpeg/
 tools/sound2wem/ffmpeg_unzip/
 tools/sound2wem/*.zip
+
+# 离线自检产物
+tests/**/out/
+tests/**/selftest_tmp/

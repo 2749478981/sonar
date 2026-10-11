@@ -1,4 +1,4 @@
-// ===========================================================================
+﻿// ===========================================================================
 //  SonarEfx.cpp —— 特效捕获实现（见 SonarEfx.h 的设计说明）
 // ===========================================================================
 #include "SonarEfx.h"
@@ -49,6 +49,7 @@ struct Entry {
 std::unordered_map<std::uint64_t, std::vector<int>> g_lookup;   // key=(group<<32|rec) → Entry 下标
 std::vector<Entry> g_entries;
 std::vector<std::string> g_tables;
+std::size_t   g_skipped = 0;   // 索引里被跳过的非 hm_wp* 表数（自检显示用）
 
 std::wstring  g_dir;
 std::wstring  g_logPath;
@@ -209,6 +210,7 @@ bool LoadIndex(std::string& why) {
     fclose(f);
 
     std::size_t p0 = 0;
+    std::size_t skipped = 0;
     while (p0 < text.size()) {
         std::size_t e = text.find('\n', p0);
         if (e == std::string::npos) e = text.size();
@@ -218,7 +220,13 @@ bool LoadIndex(std::string& why) {
         if (line.empty()) continue;
         if (line.compare(0, 7, "#TABLE|") == 0) {
             const std::size_t b1 = line.find('|', 7);
-            if (b1 != std::string::npos) g_tables.push_back(line.substr(7, b1 - 7));
+            if (b1 != std::string::npos) {
+                const std::string tn = line.substr(7, b1 - 7);
+                // ★ 只认武器特效表：hm_wpXX（含 hm_wp03_01 这类变体）。
+                //   用户实测结论："武器的特效全是 hm_wp 开头的"。别的表（怪物/环境/UI）一律不收。
+                if (tn.compare(0, 5, "hm_wp") == 0) g_tables.push_back(tn);
+                else ++skipped;
+            }
             continue;
         }
         // 表名 \t 组 \t 下标 \t id \t 路径
@@ -232,6 +240,7 @@ bool LoadIndex(std::string& why) {
             q = t + 1;
         }
         if (k < 4 || f5[0].empty()) continue;
+        if (f5[0].compare(0, 5, "hm_wp") != 0) { ++skipped; continue; }   // 非武器表：不收录
         Entry en;
         en.table = f5[0];
         en.group = (std::uint32_t)std::atoi(f5[1].c_str());
@@ -241,7 +250,8 @@ bool LoadIndex(std::string& why) {
         g_lookup[((std::uint64_t)en.group << 32) | en.rec].push_back((int)g_entries.size());
         g_entries.push_back(std::move(en));
     }
-    if (g_entries.empty()) { why = "WseEfxIndex.txt 里没有可用条目"; return false; }
+    if (g_entries.empty()) { why = "WseEfxIndex.txt 里没有 hm_wp* 武器表的条目"; return false; }
+    if (skipped) g_skipped = skipped;
     return true;
 }
 
