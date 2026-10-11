@@ -17,12 +17,14 @@
     <ClCompile Include="src\wwise\SonarWwise.cpp" />
     <ClCompile Include="src\wwise\SonarBanks.cpp" />
     <ClCompile Include="src\wwise\SonarIpc.cpp" />
+    <ClCompile Include="src\efx\SonarEfx.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\wwise\SonarAudioIpc.h" />
     <ClInclude Include="src\wwise\SonarWwise.h" />
     <ClInclude Include="src\wwise\SonarBanks.h" />
     <ClInclude Include="src\wwise\SonarIpc.h" />
+    <ClInclude Include="src\efx\SonarEfx.h" />
     <ClInclude Include="third_party\minhook\MinHook.h" />
   </ItemGroup>
   <ItemGroup>
@@ -71,7 +73,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)src\wwise;$(ProjectDir)third_party\minhook;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)src\wwise;$(ProjectDir)src\efx;$(ProjectDir)third_party\minhook;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -91,7 +93,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)src\wwise;$(ProjectDir)third_party\minhook;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)src\wwise;$(ProjectDir)src\efx;$(ProjectDir)third_party\minhook;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>

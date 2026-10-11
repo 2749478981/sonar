@@ -44,6 +44,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "SonarEfx.h"          // 特效捕获（实验性）：hook Effect:Ctor
 #include <objbase.h>
 #include <mmsystem.h>
 
@@ -742,6 +743,8 @@ int gDebounceMs = 120;
 volatile int gVolumePct = 100;
 volatile int gEnabled = 1;
 volatile int gMoreSounds = 1;   // legacy: only affects pools without any fixed sound
+volatile int gEfxCapture = 1;    // 特效捕获（实验性）：hook Effect:Ctor 记录武器特效调用
+int EfxWeaponProvider() { return player::gWeapon; }   // 给 sonarefx 用：当前武器类型（挑表用）
 
 // --- wem 误触发抑制（进图/换区预加载）---
 //   KillSettleMs: 进图/切装完成后，多少毫秒内的 wem 一律忽略（0 = 关闭该抑制）
@@ -1902,6 +1905,7 @@ void LoadConfig()
                 else if (key == "Volume") gVolumePct = ClampInt(std::atoi(val.c_str()), 0, 100);
                 else if (key == "Enabled") gEnabled = std::atoi(val.c_str()) != 0;
                 else if (key == "MoreSounds") gMoreSounds = std::atoi(val.c_str()) != 0;
+            else if (key == "EfxCapture") gEfxCapture = std::atoi(val.c_str()) != 0;
                 else if (key == "ChatEcho") g_useChatEcho = std::atoi(val.c_str()) != 0;
                 else if (key == "ChatCommands") g_useChatCommands = std::atoi(val.c_str()) != 0;
                 else if (key == "Hotkeys") g_hotkeysEnabled = std::atoi(val.c_str()) != 0;
@@ -3035,6 +3039,7 @@ DWORD WINAPI WorkerProc(LPVOID)
 
         PollChatCommand();
         HandleGuiRequests();   // GUI 按钮写的标记文件 → 立即重载 / 停止音效
+        ::sonarefx::Flush();   // 特效捕获：把 hook 记下的事件查表 + 写日志（主线程做 I/O）
         DumpLayerProbe();      // layer 探针（ini LayerProbe=1 时）：wem 事件后 dump 实体差异
 
         // 场景小文件（GUI 捕获面板显示当前场景；顺便给"判定信号可用性"）：
@@ -3287,6 +3292,15 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
         //   注意：hook 若失败会自动降级（日志里会写），触发退回读磁盘日志通道。
         ::sonaraudio::SetEventSink(&WemEventSink);
         ::sonaraudio::SonarAudioStart(module);
+        // ★ 特效捕获（实验性）：运行时扫内存定位 Effect:Ctor → hook → 记录 (表,组,记录)。
+        //   磁盘上的 exe 被 DRM 包裹（.text 全加密），所以只能扫内存；扫不到会在日志里写明原因。
+        {
+            std::string efxLog;
+            ::sonarefx::SetWeaponProvider(&EfxWeaponProvider);
+            ::sonarefx::SetEnabled(gEfxCapture != 0);
+            ::sonarefx::Init(gModuleDir, efxLog);
+            if (!efxLog.empty()) LogD("%s", efxLog.c_str());
+        }
         HANDLE t = ::CreateThread(nullptr, 0, &WorkerProc, nullptr, 0, nullptr);
         if (t) ::CloseHandle(t);
         HANDLE hk = ::CreateThread(nullptr, 0, &HotkeyProc, nullptr, 0, nullptr);

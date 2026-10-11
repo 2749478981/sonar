@@ -1250,6 +1250,12 @@ struct Core::Impl {
         int wemMedia = -1;      // kind=1：WWise media id
         std::string wemName;    // kind=1：可读名（bank/path）
         std::string bank;       // kind=1：nbnk bank 名（wp_bow_cmn）
+        // kind=2：特效捕获（表 · 组 · 组内记录下标）
+        std::string efxTable;
+        int efxGroup = -1;
+        int efxRec = -1;
+        int efxRecId = -1;
+        std::string efxPath;
         std::string time;
         unsigned long long ms = 0;     // GetTickCount64 时间戳，用于"短时间同动作合并"
     };
@@ -1287,6 +1293,20 @@ struct Core::Impl {
     std::string curWemBank;
     int curWemWeapon = -1;
     bool hasWemNames = false;
+
+    // ---- 特效捕获（实验性）：读 plugins\WeaponSoundEnhance_efx.log ----
+    std::vector<HistEntry> efxHist;   // kind=2 特效
+    int efxRev = 0, efxDup = 0;
+    int efxOkCount = 0;
+    std::ifstream efxStream;
+    unsigned long long efxLastPoll = 0;
+    std::string efxLogPath;
+    std::string efxStatus;            // DLL 自检行（hook=ok … / 失败原因）
+    std::string curEfxTable;          // 最近一条特效
+    int curEfxGroup = -1;
+    int curEfxRec = -1;
+    int curEfxWeapon = -1;
+    std::string curEfxPath;
 
     unsigned long long lastPoll = 0;    // 按 ini 的 PollMs 节流
     bool dirty = false;                 // cfg 有未保存改动
@@ -1548,6 +1568,11 @@ struct Core::Impl {
         }
         if (!cand.empty()) {   // log 还没生成（游戏没跑过）也先占位，运行时照常尝试
             wemLogPath = cand[0] + "WeaponSoundEnhance_wem.log";
+        // 特效捕获日志（同一个 plugins 目录；DLL 的 sonarefx 模块写）
+        for (const auto& d : cand) {
+            if (FsExists(d + "WeaponSoundEnhance_efx.log")) { efxLogPath = d + "WeaponSoundEnhance_efx.log"; break; }
+        }
+        if (efxLogPath.empty() && !cand.empty()) efxLogPath = cand[0] + "WeaponSoundEnhance_efx.log";
         }
     }
 
@@ -1993,6 +2018,7 @@ struct Core::Impl {
         liveOk = game.Poll(pr, live);
         if (!game.IsAttached()) liveOk = false;
         RecordWemEvents();     // wem 捕获（读 SonarAudio.log；不依赖进场景/附着）
+        RecordEfxEvents();    // 特效捕获（读 WeaponSoundEnhance_efx.log）
         RecordHistory();
     }
 
@@ -2293,6 +2319,95 @@ struct Core::Impl {
     }
 
     // wem 捕获列表（独立）
+    // ---- 特效捕获（实验性）：读 plugins\WeaponSoundEnhance_efx.log ----
+    //   日志由 DLL 的 sonarefx 模块写：hook 引擎的 Effect:Ctor，只记落在 hm_wp* 表里的调用。
+    //   行格式：efx seq#N table=hm_wp03 group=2005 rec=2 id=-1 weapon=3 name=vfx\...
+    //   头部还有一行 # sonarefx hook=ok ... / hook 失败原因（界面直接显示，不静默）
+    void RecordEfxEvents() {
+        const unsigned long long nowMs = ::GetTickCount64();
+        if (nowMs - efxLastPoll < 250) return;
+        efxLastPoll = nowMs;
+        if (efxLogPath.empty()) return;
+        if (efxStream.is_open() && efxStream.eof()) efxStream.clear();
+        if (!efxStream.is_open()) {
+            efxStream.open(efxLogPath, std::ios::binary);
+            if (efxStream.is_open()) efxStream.seekg(0, std::ios::end);   // 不回放历史
+        }
+        if (!efxStream.is_open()) return;
+        std::string line;
+        while (std::getline(efxStream, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
+            if (line[0] == '#') {                      // 自检行：记下来给界面显示
+                const std::size_t p = line.find("sonarefx ");
+                if (p != std::string::npos) efxStatus = line.substr(p + 9);
+                continue;
+            }
+            if (line.compare(0, 4, "efx ") != 0) continue;
+            char table[64] = {}, name[512] = {};
+            unsigned seq = 0, group = 0, rec = 0;
+            int recId = -1, weapon = -1;
+            // 表名/组/记录/… 都是无空格 token，名字（路径）取到行尾
+            if (sscanf_s(line.c_str(),
+                            "efx seq#%u table=%63s group=%u rec=%u id=%d weapon=%d name=%511[^\n]",
+                            &seq, table, &group, &rec, &recId, &weapon, name) < 7) continue;
+            ++efxOkCount;
+            // 去重：和最新一条相同 → 丢；或 500ms 内同 (表,组,记录) → 丢
+            const bool sameTop = (!efxHist.empty() &&
+                                  efxHist.front().efxTable == table &&
+                                  efxHist.front().efxGroup == (int)group &&
+                                  efxHist.front().efxRec == (int)rec);
+            bool dup = sameTop;
+            if (!dup) {
+                for (std::size_t i = 0; i < efxHist.size(); ++i) {
+                    const HistEntry& ph = efxHist[i];
+                    if (nowMs - ph.ms >= 500) break;
+                    if (ph.efxTable == table && ph.efxGroup == (int)group && ph.efxRec == (int)rec) { dup = true; break; }
+                }
+            }
+            if (dup) { ++efxDup; continue; }
+            HistEntry h;
+            h.kind = 2;
+            h.efxTable = table;
+            h.efxGroup = (int)group;
+            h.efxRec = (int)rec;
+            h.efxRecId = recId;
+            h.efxPath = name;
+            h.weapon = weapon;
+            h.ms = nowMs;
+            h.time = TimeNowHms();
+            efxHist.insert(efxHist.begin(), h);
+            if (efxHist.size() > 300) efxHist.pop_back();
+            ++efxRev;
+            curEfxTable = table;
+            curEfxGroup = (int)group;
+            curEfxRec = (int)rec;
+            curEfxPath = name;
+            curEfxWeapon = weapon;
+        }
+        efxStream.clear();
+        efxStream.seekg(0, std::ios::end);
+    }
+
+    // 特效捕获列表 → JSON
+    JVal EfxJson() const {
+        JVal a = JVal::arr();
+        for (std::size_t i = 0; i < efxHist.size(); ++i) {
+            const HistEntry& e = efxHist[i];
+            JVal h = JVal::obj();
+            h.set("kind", JVal(2));
+            h.set("table", JVal(e.efxTable));
+            h.set("group", JVal(e.efxGroup));
+            h.set("rec", JVal(e.efxRec));
+            h.set("recId", JVal(e.efxRecId));
+            h.set("name", JVal(e.efxPath));
+            h.set("weapon", JVal(e.weapon));
+            h.set("time", JVal(e.time));
+            h.set("ageMs", JVal((long long)(::GetTickCount64() - e.ms)));
+            a.push(h);
+        }
+        return a;
+    }
     JVal WemJson() const {
         JVal a = JVal::arr();
         for (std::size_t i = 0; i < wemHist.size(); ++i) {
@@ -2375,6 +2490,18 @@ struct Core::Impl {
         d.set("wemWeapon", JVal(curWemWeapon));
         d.set("der", DerJson());
         d.set("wem", WemJson());
+        // 特效捕获（实验性）
+        d.set("efx", EfxJson());
+        d.set("efxRev", JVal(efxRev));
+        d.set("efxCount", JVal((int)efxHist.size()));
+        d.set("efxDup", JVal(efxDup));
+        d.set("efxOk", JVal(efxOkCount));
+        d.set("efxStatus", JVal(efxStatus));
+        d.set("efxTable", JVal(curEfxTable));
+        d.set("efxGroup", JVal(curEfxGroup));
+        d.set("efxRec", JVal(curEfxRec));
+        d.set("efxWeapon", JVal(curEfxWeapon));
+        d.set("efxPath", JVal(curEfxPath));
         d.set("derRev", JVal(derRev));
         d.set("wemRev", JVal(wemRev));
         d.set("derCount", JVal((int)derHist.size()));
@@ -4717,8 +4844,10 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 : p.optStr("scope");
             const bool doWem = (scope == "wem" || scope == "all");
             const bool doDer = (scope == "derived" || scope == "all");
+            const bool doEfx = (scope == "efx" || scope == "all");
             if (doDer) { im->derHist.clear(); ++im->derRev; }
             if (doWem) { im->wemHist.clear(); ++im->wemRev; }
+            if (doEfx) { im->efxHist.clear(); ++im->efxRev; }
             im->curWemMedia = -1;
             im->curWemName.clear();
             im->curWemBank.clear();
@@ -4740,12 +4869,31 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 if (h != INVALID_HANDLE_VALUE) ::CloseHandle(h);
             }
             im->wemStream.close();   // 关流：下次自动重开并跳到末尾
+            // 特效捕获：同样清日志 + 统计（scope=efx 或 all）
+            if (doEfx) {
+                im->efxOkCount = 0;
+                im->efxDup = 0;
+                im->curEfxTable.clear();
+                im->curEfxGroup = -1;
+                im->curEfxRec = -1;
+                im->curEfxWeapon = -1;
+                im->curEfxPath.clear();
+                if (!im->efxLogPath.empty()) {
+                    HANDLE he = ::CreateFileW(Utf8ToWide(im->efxLogPath).c_str(), GENERIC_WRITE,
+                                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                              TRUNCATE_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    if (he != INVALID_HANDLE_VALUE) ::CloseHandle(he);
+                }
+                im->efxStream.close();
+                im->efxLastPoll = 0;
+            }
             im->wemLastPoll = 0;
             JVal d = JVal::obj();
             d.set("cleared", JVal(true));
             d.set("scope", JVal(scope));
             d.set("der", im->DerJson());
             d.set("wem", im->WemJson());
+            d.set("efx", im->EfxJson());
             return OkJson(d);
         }
         // ---- 用户自定义 wem 名字（保存到 WseWemNames_user.txt，下次自动读取）----

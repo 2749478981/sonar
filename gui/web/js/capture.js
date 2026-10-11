@@ -18,10 +18,11 @@ const Capture = (() => {
   const API = () => window.SonarAPI || null;
 
   const S = {
-    view: 'derived',        // 'derived' | 'wem'
+    view: 'derived',        // 'derived' | 'wem' | 'efx'
     expanded: false,
     lastDerRev: -1,
     lastWemRev: -1,
+    lastEfxRev: -1,
     playingKey: '',   // 只高亮"被点的那一行"（media+时间），避免同 media 多行一起亮
   };
 
@@ -135,9 +136,21 @@ const Capture = (() => {
             : (r.added ? btn('编辑', () => a.addWemRecord(r)) : btn('＋ 添加', () => a.addWemRecord(r))))));
   }
 
+  // 特效行：表 · 组 · 记录（标识 = epv 表 + group + 组内记录下标）
+  function efxRow(r) {
+    const label = `${r.table} · 组${r.group} · #${r.rec}`;
+    const meta = (r.name || '') + (r.recId >= 0 ? `　id=${r.recId}` : '') +
+                 (r.weapon >= 0 ? `　w${r.weapon}` : '');
+    return el('div', { class: 'hrec efx two', title: label + '\n' + (r.name || '') },
+      el('div', { class: 'l1' },
+        el('b', { text: r.time || '' }),
+        el('span', { class: 'n', text: label })),
+      el('div', { class: 'l2' },
+        el('span', { class: 'ids', text: meta })));
+  }
+
   // ---- 一个宿主面板 ----
-  function renderHost(host) {
-    const a = API();
+  function renderHost(host) {    const a = API();
     if (!a) { host.textContent = '界面模块未就绪（SonarAPI 缺失）'; return; }
     const page = host.dataset.page || 'main';
     const L = live();
@@ -165,7 +178,9 @@ const Capture = (() => {
       el('button', { class: 'vs' + (S.view === 'derived' ? ' on' : ''), text: '派生捕获',
         onclick: () => { S.view = 'derived'; render(); } }),
       el('button', { class: 'vs' + (S.view === 'wem' ? ' on' : ''), text: 'WEM 音效',
-        onclick: () => { S.view = 'wem'; render(); } })));
+        onclick: () => { S.view = 'wem'; render(); } }),
+      el('button', { class: 'vs' + (S.view === 'efx' ? ' on' : ''), text: '武器特效',
+        onclick: () => { S.view = 'efx'; render(); } })));
 
     // 过滤提示（显式 + 一键清除 + 隐藏条数）
     const allDer = L.der || [], allWem = L.wem || [];
@@ -266,11 +281,61 @@ const Capture = (() => {
       host.appendChild(box);
     }
 
+    // ---- 武器特效列表（实验性）----
+    if (S.view === 'efx') {
+      host.appendChild(el('div', { class: 'note exp', text:
+        '⚠ 实验性：通过挂钩引擎的特效生成函数，记录武器特效的调用（表 · 组 · 记录）。' +
+        '只读、不改游戏行为；目前仅用于捕获，还不能据此播放音效。' }));
+      // 自检状态：挂钩成功/失败原因（失败时明确说出来，不静默）
+      const st = L.efxStatus || '';
+      if (st) {
+        const bad = st.indexOf('失败') >= 0 || st.indexOf('未找到') >= 0;
+        host.appendChild(el('div', { class: 'note' + (bad ? ' warnchip' : ' dim'), text: '特效捕获：' + st }));
+      }
+      const allEfx = L.efx || [], efx = filterList(allEfx);
+      // 实时行
+      if (L.efxTable) {
+        host.appendChild(row({ class: 'live-row efx', title: '游戏刚生成的特效' },
+          el('b', { text: `${L.efxTable} · 组${L.efxGroup} · #${L.efxRec}` }),
+          el('span', { class: 'dim', text: L.efxPath || '' }),
+          el('span', { class: 'capacts' },
+            btn('复制标识', () => {
+              const txt = `${L.efxTable} ${L.efxGroup} ${L.efxRec}`;
+              try { navigator.clipboard.writeText(txt); toast('已复制：' + txt, 'ok'); }
+              catch (e) { toast('复制失败：' + txt, 'err'); }
+            }, '复制「表 组 记录」标识'))));
+      }
+      host.appendChild(el('div', { class: 'caplist-head' },
+        el('span', { text: `武器特效（${efx.length}${efx.length !== allEfx.length ? '/' + allEfx.length : ''} 条）` }),
+        el('span', { class: 'grow' }),
+        efx.length ? btn('清空', () => clearScope('efx'), '只清空特效捕获（含日志文件）') : null));
+
+      const ebox = el('div', { class: 'hist' });
+      if (!efx.length) {
+        ebox.appendChild(el('div', { class: 'note', text: allEfx.length
+          ? `特效记录有 ${allEfx.length} 条，但被过滤条件隐藏了（点上面的 ✕ 清除过滤）`
+          : '还没有特效记录：进游戏、拿武器打几下再回来看' }));
+      } else {
+        const show = S.expanded ? efx : efx.slice(0, 20);
+        show.forEach(r => ebox.appendChild(efxRow(r)));
+        if (efx.length > 20) {
+          ebox.appendChild(row({ class: 'hrec more',
+            text: S.expanded ? '收起历史 ▲' : `展开更早的 ${efx.length - 20} 条 ▼`,
+            onclick: () => { S.expanded = !S.expanded; render(); } }));
+        }
+      }
+      host.appendChild(ebox);
+    }
+
     // 统计（一行说清：事件到了多少、识别多少、被丢多少）
     const ok = L.wemOk || 0, zero = L.wemZero || 0, dup = L.wemDup || 0, loop = L.wemLoopDrop || 0;
-    if (ok + zero + dup + loop > 0) {
+    if (S.view === 'wem' && ok + zero + dup + loop > 0) {
       host.appendChild(el('div', { class: 'capstat',
         text: `识别 ${ok} · 未识别 ${zero} · 重复丢弃 ${dup} · 循环音静默 ${loop}` }));
+    }
+    if (S.view === 'efx' && ((L.efxOk || 0) + (L.efxDup || 0) > 0)) {
+      host.appendChild(el('div', { class: 'capstat',
+        text: `武器特效 ${L.efxOk || 0} · 重复丢弃 ${L.efxDup || 0}` }));
     }
   }
 
@@ -280,12 +345,13 @@ const Capture = (() => {
     const L = live();
     S.lastDerRev = L.derRev;
     S.lastWemRev = L.wemRev;
+    S.lastEfxRev = L.efxRev;
   }
 
   // 收到 live 推送：修订号没变就不重绘（省 CPU、避免闪）
   function onPush(d) {
     if (!d) return;
-    if (d.derRev === S.lastDerRev && d.wemRev === S.lastWemRev) return;
+    if (d.derRev === S.lastDerRev && d.wemRev === S.lastWemRev && d.efxRev === S.lastEfxRev) return;
     render();
   }
 
