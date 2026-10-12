@@ -1,3 +1,5 @@
+
+
 // ===========================================================================
 //  main_web.cpp —— Sonar 配置工具的新宿主（WebView2）
 //
@@ -509,7 +511,9 @@ void ProbePage() {
                 LogLine("page: %s", WideToUtf8(json ? json : L"(null)").c_str());
                 return S_OK;
             }).Get());
+
 }
+
 
 }  // namespace
 

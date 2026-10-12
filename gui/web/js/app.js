@@ -1223,24 +1223,33 @@ function fillPools() {
   rebuild();
 }
 
+const POOL_ACCENTS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#ec4899'];
+let poolSeq = 0;
+const poolAccent = k => POOL_ACCENTS[Math.abs(k) % POOL_ACCENTS.length];
+
 function buildPools(box, e) {
   const isLS = e.weaponType === 3;
+  poolSeq = 0;   // 每次渲染重新分配配色
   e.gauge = e.gauge || [[], [], [], []];
 
   const pool = (title, arr, key, canRemove) => {
     const openKey = key;
     const id = key;
     const open = ED.poolOpen[id] !== false;
+    // ★ 每个音效池各自成一个框（不同池不同配色）：用户要能一眼分清
+    //   "这 5 条属于默认音效"、"这 3 条属于 dmg>0"、"那 2 条属于 dmg<0"。
+    const wrap = h('div', { class: 'poolbox', style: `--pa:${poolAccent(poolSeq++)}` });
     const head = h('div', { class: 'poolhead' + (open ? '' : ' closed') },
       h('span', { class: 'arrow', text: '▼' }), `${title}  ${arr.length} 条`);
     head.onclick = () => { ED.poolOpen[id] = !open; fillPools(); };
-    box.appendChild(head);
+    wrap.appendChild(head);
+    box.appendChild(wrap);
     if (!open) return;
 
     arr.forEach((sp, i) => {
-      box.appendChild(soundCard(sp, () => { arr.splice(i, 1); fillPools(); }, () => {}));
+      wrap.appendChild(soundCard(sp, () => { arr.splice(i, 1); fillPools(); }, () => {}));
     });
-    if (!arr.length) box.appendChild(h('div', { class: 'note', style: 'margin-bottom:8px' }, '(空)'));
+    if (!arr.length) wrap.appendChild(h('div', { class: 'note', style: 'margin-bottom:8px' }, '(空)'));
 
     // 只保留"浏览…"选文件，不手填路径（手填容易填错，选文件最稳）
     const browse = h('button', { onclick: async () => {
@@ -1251,7 +1260,7 @@ function buildPools(box, e) {
       });
       fillPools();
     } }, '浏览… 选音效');
-    box.appendChild(h('div', { class: 'addrow' }, browse));
+    wrap.appendChild(h('div', { class: 'addrow' }, browse));
   };
 
   $('#edDefHead').textContent = isLS ? '默认音效（任意刃时）' : '默认音效';
@@ -1267,6 +1276,7 @@ function buildPools(box, e) {
 
 /* ---- 判定条件 ---- */
 function fillConds() {
+  let condSeq = 0;
   const box = $('#edConds');
   box.innerHTML = '';
   const e = ED.draft;
@@ -1291,9 +1301,12 @@ function fillConds() {
         h('label', { class: 'inline' }, atEnd, '只在窗口结束时判定（SoundEnd:）'),
         h('span', { class: 'tip' }, '变量：dmg / aura / dAura / charge / dCharge / lmt / fsm / fsmTarget / ms')));
     c.pool = c.pool || [];
-    c.pool.forEach((sp, k) => cb.appendChild(
+    // ★ 这个条件的音效单独一个框（配色与该条件绑定），与其它条件/默认音效区分开
+    const cwrap = h('div', { class: 'poolbox sub', style: `--pa:${poolAccent(condSeq++)}` },
+      h('div', { class: 'poolhead' }, `条件音效池  ${c.pool.length} 条`));
+    c.pool.forEach((sp, k) => cwrap.appendChild(
       soundCard(sp, () => { c.pool.splice(k, 1); fillConds(); }, () => {})));
-    cb.appendChild(h('div', { class: 'addrow' },
+    cwrap.appendChild(h('div', { class: 'addrow' },
       h('button', { onclick: async () => {
         const r = await Backend.call('sound.pickMulti', {});
         (r.paths || []).forEach(p => {
@@ -1302,6 +1315,7 @@ function fillConds() {
         });
         fillConds();
       } }, '浏览… 选音效')));
+    cb.appendChild(cwrap);
     box.appendChild(cb);
   });
   if (!e.conds.length) box.appendChild(h('div', { class: 'note' }, '还没有条件：点下面「＋ 添加条件」'));

@@ -1,0 +1,6 @@
+        L"var efxView=(function(){try{"
+        L"var r=document.querySelector('#entryBody tr');"
+        L"if(!r)return 'no-rows';"
+        L"r.click();"
+        L"return 'clicked';"
+        L"}catch(e){return 'EXC1:'+e.message;}})();"
