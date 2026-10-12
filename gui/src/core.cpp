@@ -3043,6 +3043,20 @@ std::string RelPathForPicked(void* corePtr, const std::wstring& f, bool& copiedF
 }
 
 // 试听 / 播放要把配置里的路径还原成磁盘路径
+// 配置里的音效路径 → 磁盘绝对路径（与 DLL 的 AbsFor 行为一致）。
+//   ★ 绝对路径（盘符 / UNC，常含中文）必须原样使用：以前导入/导出/检查都直接拼
+//     "数据目录 + 路径"，于是 D:/Videos/WAV音效/… 变成 …\WeaponSoundEnhance\D:\… 找不到，
+//     导出时报"音效文件缺失"（用户实测 140 个缺失，其中绝对路径的其实都在）。
+std::wstring ResolveAudioDisk(Core::Impl* im, const std::string& p) {
+    if (p.empty()) return std::wstring();
+    if (IsAbsPath(p)) return LongPathW(ToBack(p));
+    const std::string inData = im->BaseDir() + ToBack(p);
+    if (FsExists(inData)) return LongPathW(inData);
+    const std::string inExe = im->exeDir + ToBack(p);   // 旧布局：与 DLL/exe 同级
+    if (FsExists(inExe)) return LongPathW(inExe);
+    return LongPathW(inData);                            // 都不在也返回主候选，调用方判存在性
+}
+
 std::wstring ResolveSoundPath(void* corePtr, const std::string& rel) {
     Core::Impl* im = ImplOf(corePtr);
     if (rel.empty()) return std::wstring();
@@ -3142,7 +3156,8 @@ bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::s
                 // 源文件：sounds/相对 → 数据目录；找不到再试旧布局（exe 同级）
                 std::wstring src;
                 if (!IsAbsPath(sp.path) && !sp.path.empty()) {
-                    const std::string cand = im->BaseDir() + ToBack(sp.path);
+                    const std::wstring candW = ResolveAudioDisk(im, sp.path);
+                    const std::string cand = Utf8FromWide(candW);
                     if (FsExists(cand)) src = Utf8ToWide(cand);
                     else {
                         const std::string cand2 = im->exeDir + ToBack(sp.path);
@@ -3342,7 +3357,8 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
                     std::wstring src;
                     if (hasPkgSounds && !Finder::Find(Utf8ToWide(pkgSounds), baseW, src)) src.clear();
                     if (src.empty()) {
-                        const std::string local = im->BaseDir() + ToBack(sp.path);
+                        const std::wstring localW = ResolveAudioDisk(im, sp.path);
+                        const std::string local = Utf8FromWide(localW);
                         if (FsExists(local)) src = Utf8ToWide(local);
                     }
                     if (src.empty()) { ++sndMissing; continue; }        // 找不到：路径保持原样
@@ -3865,7 +3881,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                     if (noSound <= 3) { if (!noSoundNames.empty()) noSoundNames += "、"; noSoundNames += e.name.empty() ? ("#" + std::to_string(i)) : e.name; }
                 }
                 for (std::size_t s = 0; s < e.def.specs.size(); ++s) {
-                    const std::string abs = im->BaseDir() + ToBack(e.def.specs[s].path);
+                    const std::string abs = Utf8FromWide(ResolveAudioDisk(im, e.def.specs[s].path));
                     if (!FsExists(abs)) {
                         ++missing;
                         if (missing <= 3) { if (!missingNames.empty()) missingNames += "、"; missingNames += e.def.specs[s].path; }
