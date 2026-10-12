@@ -750,13 +750,13 @@ html.overlay-mode .app > .toolbar,
 html.overlay-mode .app > .opts,
 html.overlay-mode .app > footer.status,
 html.overlay-mode .app > #mainBank { display:none !important; }
-html.overlay-mode .app{padding:0 !important; gap:0 !important; height:calc(100vh - 34px) !important}
+html.overlay-mode .app{padding:0 !important; gap:0 !important; height:100vh !important}
 html.overlay-mode #mainEntries{display:block !important; padding:0 !important; margin:0 !important;
-  height:calc(100vh - 34px) !important}
+  height:100vh !important}
 html.overlay-mode #mainEntries > .rail,
 html.overlay-mode #mainEntries > .center { display:none !important; }
 html.overlay-mode #mainEntries > .capture{display:flex !important; margin:0 !important; border:0 !important;
-  border-radius:0 !important; height:calc(100vh - 34px) !important; max-height:calc(100vh - 34px) !important; width:100% !important;
+  border-radius:0 !important; height:100vh !important; max-height:100vh !important; width:100% !important;
   box-shadow:none !important; padding:10px 12px !important}
 html.overlay-mode .chead{padding:2px 0 8px !important}
 html.overlay-mode .capture .hrec{font-size:12px !important}
