@@ -502,7 +502,7 @@ void ProbePage() {
         L"icons:ok+'/'+im.length,firstIcon:(first?first.getAttribute('src'):null),"
         L"logoOk:(logo?logo.naturalWidth>0:null),"
         L"capType:(typeof Capture),api:apiInfo,hosts:hosts.length,capRows:cm+'/'+cb,view:view,"
-        L"layout:layout,m1:m1,m2:m2,m3:m3,m4:m4,d1:d1,d2:d2,tx:tx,fd:fd,nl:nl,s1:s1,s2:s2,s3:s3,wemView:wemView,capStat:(stat?stat.textContent:''),capFilter:(filt?filt.textContent:''),"
+        L"layout:layout"
         L"capText:ct,status:(st?st.textContent:'')"
         L"});})()",
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
