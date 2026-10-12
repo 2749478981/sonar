@@ -1187,7 +1187,7 @@ SoundEntry EntryFromJson(const JVal& v, const std::vector<std::string>& allowedC
     e.checkDelayMs = v.optInt("checkDelayMs", 0);
     e.checkTimeoutMs = v.optInt("checkTimeoutMs", 0);
     e.checkOffsetMs = v.optInt("checkOffsetMs", 150);
-    e.endOnAction = v.optBool("endOnAction", true);
+    e.endOnAction = v.optBool("endOnAction", false);   // 缺省不勾
     e.checkMode = v.optInt("checkMode", 0);
     e.judgePreset = v.optInt("judgePreset", 0);
 

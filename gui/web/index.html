@@ -93,10 +93,10 @@
         <button class="primary" data-act="entry.add">＋ 新增条目</button>
         <button data-act="entry.lint" title="检查当前武器条目里容易踩的坑：重复触发条件、没有音效、音效文件不存在、匹配任意动作">检查配置</button>
         <button data-act="entry.merge" title="把触发条件完全相同的条目合并成一条（音效池取并集），整理重复/多余的配置">合并同条件</button>
-      </div>
-      <div class="viewswitch list">
-        <button id="viewListFsm" class="vs on">派生条目（FSM/LMT）</button>
-        <button id="viewListWem" class="vs">WEM 条目（id/序号）</button>
+        <div class="viewswitch list inline-switch">
+          <button id="viewListFsm" class="vs on">派生条目（FSM/LMT）</button>
+          <button id="viewListWem" class="vs">WEM 条目（id/序号）</button>
+        </div>
       </div>
       <div class="tablewrap">
         <table id="entryTable">
@@ -410,7 +410,7 @@
       <div class="upd-row"><span>仓库最新</span><b id="updNew">—</b></div>
       <div class="upd-notes" id="updNotes"></div>
       <div class="bar" id="updBar" hidden><i id="updBarFill"></i></div>
-      <div class="note" id="updMsg"></div>
+      <div class="note" id="updMsg"></div>
         <div class="field hint" id="updDllHint" hidden></div>
       <div class="btnrow">
         <button class="primary" data-act="upd.check">检查更新</button>

@@ -799,7 +799,7 @@ async function captureToEntry(r) {
     fsmId: fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
     def: [], gauge: [[], [], [], []],
-    checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: true,
+    checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
   try {
@@ -846,7 +846,7 @@ async function addWemRecord(r) {
     media: media, bank: r.bank || '', fsmId: -1, fsmTarget: -1, group: '', stop: false,
     lmt: [], lmtAny: false,   // 不限不勾选：wem 条目可以填 LMT 作为附加条件
     def: [], gauge: [[], [], [], []],
-    checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: true,
+    checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
   try {
@@ -949,7 +949,7 @@ function blankEntry() {
   return { name: '', weaponType: ST.weaponFilter >= 0 ? ST.weaponFilter : -1, combo: '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
     def: [], gauge: [[], [], [], []],
-    checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: true,
+    checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [] };
 }
 
@@ -1434,7 +1434,7 @@ async function addFsmToCombo(row) {
     fsmId: row.fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
     def: [], gauge: [[], [], [], []],
-    checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: true,
+    checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
   try {

@@ -51,7 +51,7 @@ struct SoundEntry {
     int checkDelayMs = 0;         // 从第几毫秒开始计伤害（排除招式前段的伤害）
     int checkTimeoutMs = 0;       // 窗口上限；0 = 不启用判定，行为与旧版一致
     int checkOffsetMs = 150;      // 判定点在"实测最晚出伤时刻"之上留的余量
-    bool endOnAction = true;      // 动作结束(含被打断)也作为判定时机
+    bool endOnAction = false;   // 默认不勾（用户实测"莫名其妙会勾上"）；旧配置 ini 里有 CheckEndOn=action 的仍为 true      // 动作结束(含被打断)也作为判定时机
     int checkMode = 0;            // CheckMode=final(1)：把所有条件都改成窗口结束时评
     int judgePreset = 0;          // 判定模式下拉的选择（0=不判定 1=造成伤害 2=登龙 3=大居 4=真蓄 5=自定义）
     std::vector<CondSpec> conds;

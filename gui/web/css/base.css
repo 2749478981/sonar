@@ -707,3 +707,9 @@ td .snd .badge{flex:none}
 td .snd .sndname{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0}
 td .snd .badge.cnt{background:var(--panel-2); border:var(--bw) solid var(--chip-border); color:var(--muted)}
 td .snd .badge.judge{background:var(--accent, #0a84ff); color:var(--on-accent, #fff); border-color:transparent}
+/* ===========================================================================
+   条目工具栏：搜索框收窄，派生/WEM 切换并入同一行（省一行高度）
+   =========================================================================== */
+.cbar #searchBox{flex:0 1 220px; min-width:120px}
+.cbar .viewswitch.inline-switch{flex:0 0 auto; margin:0; gap:6px}
+.cbar .viewswitch.inline-switch .vs{flex:0 0 auto; padding:4px 12px; font-size:12.5px}
