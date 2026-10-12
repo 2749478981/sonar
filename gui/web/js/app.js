@@ -1244,7 +1244,8 @@ function fillPools() {
   rebuild();
 }
 
-const POOL_ACCENTS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#ec4899'];
+// ★ 池配色引用主题变量（每个主题各自定义 --accent / --c-*）→ 自动跟随主题，不再固定蓝色
+const POOL_ACCENTS = ['var(--accent)', 'var(--c-purple)', 'var(--c-amber)', 'var(--c-green)', 'var(--c-red)', 'var(--c-blue)'];
 let poolSeq = 0;
 const poolAccent = k => POOL_ACCENTS[Math.abs(k) % POOL_ACCENTS.length];
 

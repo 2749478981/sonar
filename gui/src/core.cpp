@@ -3773,6 +3773,123 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             return OkJson(d);
         }
 
+        // ---- 合并"触发条件完全相同"的条目（同一武器+组合内）----
+        //  用户常把同一个条件写成好几条（重复/误操作）：合并后行为等价（音效池取并集），
+        //  但配置更清晰，也避免"同一招同时响好几遍"这类困惑。
+        if (method == "entries.mergeSame") {
+            const int w = p.optInt("weapon", im->prefs.weaponFilter);
+            if (w < 0 || w > 13) return ErrJson("先选一把武器（当前: 全部/通用）");
+            const std::string combo = im->ActiveCombo(w);
+
+            auto keyOf = [](const SoundEntry& e) {
+                std::string k = std::to_string(e.weaponType) + "|" + e.combo + "|" +
+                                std::to_string(e.fsmId) + "|" + std::to_string(e.fsmTarget) + "|" +
+                                std::to_string((long long)e.media) + "|";
+                if (e.lmt.empty()) k += "any";
+                else { for (std::size_t i = 0; i < e.lmt.size(); ++i) { if (i) k += ","; k += std::to_string(e.lmt[i]); } }
+                return k;
+            };
+            auto addPool = [](PoolSpec& dst, const PoolSpec& src) {
+                for (std::size_t i = 0; i < src.specs.size(); ++i) {
+                    bool dup = false;
+                    for (std::size_t j = 0; j < dst.specs.size(); ++j)
+                        if (dst.specs[j].path == src.specs[i].path && dst.specs[j].fixed == src.specs[i].fixed) { dup = true; break; }
+                    if (!dup) dst.specs.push_back(src.specs[i]);
+                }
+            };
+
+            std::unordered_map<std::string, std::size_t> firstIdx;
+            std::vector<SoundEntry> out;
+            int merged = 0;
+            for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
+                const SoundEntry& e = im->cfg.entries[i];
+                if (e.weaponType != w || e.combo != combo) { out.push_back(e); continue; }
+                const std::string k = keyOf(e);
+                std::unordered_map<std::string, std::size_t>::iterator it = firstIdx.find(k);
+                if (it == firstIdx.end()) { firstIdx[k] = out.size(); out.push_back(e); continue; }
+                SoundEntry& keep = out[it->second];
+                addPool(keep.def, e.def);
+                for (int g = 0; g < 4; ++g) addPool(keep.gauge[g], e.gauge[g]);
+                for (std::size_t c = 0; c < e.conds.size(); ++c) {
+                    bool dup = false;
+                    for (std::size_t d = 0; d < keep.conds.size(); ++d)
+                        if (keep.conds[d].expr == e.conds[c].expr && keep.conds[d].atEnd == e.conds[c].atEnd) { dup = true; break; }
+                    if (!dup) keep.conds.push_back(e.conds[c]);
+                }
+                ++merged;
+            }
+            if (merged == 0) {
+                im->SetStatus("没有可合并的条目：这把武器的当前组合里没有触发条件相同的条目");
+                JVal d = JVal::obj();
+                d.set("merged", JVal(0));
+                d.set("status", JVal(im->status));
+                return OkJson(d);
+            }
+            im->cfg.entries.swap(out);
+            im->dirty = true;
+            im->SetStatus("已合并 " + std::to_string(merged) + " 条重复触发条件的条目（音效池已取并集，记得保存）");
+            JVal d = JVal::obj();
+            d.set("merged", JVal(merged));
+            d.set("left", JVal((int)im->cfg.entries.size()));
+            d.set("status", JVal(im->status));
+            return OkJson(d);
+        }
+
+        // ---- 配置检查：把容易踩的坑列出来（不改配置，只报告）----
+        if (method == "entries.lint") {
+            const int w = p.optInt("weapon", im->prefs.weaponFilter);
+            JVal arr = JVal::arr();
+            std::unordered_map<std::string, int> cnt;
+            auto keyOf = [](const SoundEntry& e) {
+                std::string k = std::to_string(e.weaponType) + "|" + e.combo + "|" +
+                                std::to_string(e.fsmId) + "|" + std::to_string(e.fsmTarget) + "|" +
+                                std::to_string((long long)e.media) + "|";
+                if (e.lmt.empty()) k += "any";
+                else { for (std::size_t i = 0; i < e.lmt.size(); ++i) { if (i) k += ","; k += std::to_string(e.lmt[i]); } }
+                return k;
+            };
+            for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
+                const SoundEntry& e = im->cfg.entries[i];
+                if (w >= 0 && e.weaponType != w) continue;
+                ++cnt[keyOf(e)];
+            }
+            int dupCond = 0, noSound = 0, missing = 0, matchAll = 0;
+            std::string noSoundNames, missingNames;
+            for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
+                const SoundEntry& e = im->cfg.entries[i];
+                if (w >= 0 && e.weaponType != w) continue;
+                const bool hasSound = !e.def.empty() || !e.gauge[0].empty() || !e.gauge[1].empty() ||
+                                      !e.gauge[2].empty() || !e.gauge[3].empty() || !e.conds.empty();
+                if (!hasSound && !e.stop) {
+                    ++noSound;
+                    if (noSound <= 3) { if (!noSoundNames.empty()) noSoundNames += "、"; noSoundNames += e.name.empty() ? ("#" + std::to_string(i)) : e.name; }
+                }
+                for (std::size_t s = 0; s < e.def.specs.size(); ++s) {
+                    const std::string abs = im->BaseDir() + ToBack(e.def.specs[s].path);
+                    if (!FsExists(abs)) {
+                        ++missing;
+                        if (missing <= 3) { if (!missingNames.empty()) missingNames += "、"; missingNames += e.def.specs[s].path; }
+                        break;
+                    }
+                }
+                if (e.media <= 0 && e.fsmId < 0 && e.lmt.empty() && e.fsmTarget < 0) ++matchAll;
+            }
+            for (std::unordered_map<std::string, int>::iterator it = cnt.begin(); it != cnt.end(); ++it)
+                if (it->second > 1) ++dupCond;
+
+            if (dupCond)  arr.push(JVal(std::string("同一触发条件有多条条目：") + std::to_string(dupCond) +
+                                        " 组（同一动作会同时播放这几条；可点「合并同条件」整理）"));
+            if (noSound)  arr.push(JVal(std::string("没有任何音效的条目：") + std::to_string(noSound) + " 条（例：" + noSoundNames + "）"));
+            if (missing)  arr.push(JVal(std::string("音效文件不存在：") + std::to_string(missing) + " 条（例：" + missingNames + "）"));
+            if (matchAll) arr.push(JVal(std::string("匹配任意动作的条目：") + std::to_string(matchAll) + " 条（LMT 与 FSM 都不限，任何动作都会触发）"));
+            if (dupCond + noSound + missing + matchAll == 0) arr.push(JVal(std::string("没发现问题：触发条件没有重复、条目都有音效且文件存在")));
+            im->SetStatus("配置检查完成");
+            JVal d = JVal::obj();
+            d.set("issues", arr);
+            d.set("status", JVal(im->status));
+            return OkJson(d);
+        }
+
         // ---------------- 配置组合 ----------------
         if (method == "combo.list") {
             const int w = p.optInt("weapon", -1);
