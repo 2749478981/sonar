@@ -2083,10 +2083,15 @@ async function refresh() {
   if (location.hash === '#overlay' && !document.querySelector('.ovbar')) {
     const bar = document.createElement('div');
     bar.className = 'ovbar';
-    const t = document.createElement('span'); t.className = 'ovt'; t.textContent = 'Sonar 捕获记录';
+    const t = document.createElement('span'); t.className = 'ovt';
+    const sp = document.createElement('span'); sp.className = 'ovct';
+    const syncCt = on => { sp.textContent = on ? '穿透中 · Ctrl+Alt+O 切换' : '可交互 · Ctrl+Alt+O 切换'; };
+    window.__ovSyncCt = syncCt;   // 供 overlay 事件更新标题栏提示
+    syncCt(true);   // 默认穿透（不干扰游戏）
+    t.textContent = 'Sonar 捕获记录';
     const x = document.createElement('button'); x.className = 'ovx'; x.title = '关闭浮窗'; x.textContent = '✕';
     x.onclick = async () => { try { await Backend.call('overlay.hide', {}); } catch (e) {} };
-    bar.appendChild(t); bar.appendChild(x);
+    bar.appendChild(t); bar.appendChild(sp); bar.appendChild(x);
     document.body.insertBefore(bar, document.body.firstChild);
   }
   ST.themes = s.themes || [];
@@ -2254,6 +2259,7 @@ Backend.onEvent(ev => {
     // ★ 另一端（浮窗/主界面）改了数据 → 同步刷新，避免两边不一致
     if (ev.event === 'refresh') { refresh(); return; }   // 另一端改了数据 → 同步（不 await，避免死循环）
     // 另一端换了主题 → 跟着换（浮窗与主界面主题保持一致）
+    if (ev.event === 'overlay' && ev.data && typeof ev.data.clickThrough === 'boolean' && window.__ovSyncCt) window.__ovSyncCt(ev.data.clickThrough);
     if (ev.event === 'theme' && ev.data && ev.data.theme) {
       document.documentElement.setAttribute('data-theme', ev.data.theme);
       ST.theme = ev.data.theme;

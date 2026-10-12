@@ -55,6 +55,7 @@ ComPtr<ICoreWebView2Controller> g_ctrl;
 ComPtr<ICoreWebView2>           g_web;
 HWND                 g_hwnd = nullptr;
 ICoreWebView2*          g_curSender = nullptr;    // 当前请求的发送方（浮窗也会发请求，回复必须回给它）
+bool                    g_ovClickThrough = true;    // 浮窗默认点击穿透（不干扰游戏）；Ctrl+Alt+O 切换
 ICoreWebView2Environment* g_env = nullptr;   // 浮窗要用同一个 Environment
 std::wstring            g_webRootW;                 // 映射根（exe 目录），浮窗控制器要自己设映射
 UINT_PTR             g_pollTimer = 0;
@@ -611,6 +612,7 @@ void LoadOverlayPrefs() {
     g_ovRect.bottom = g_ovRect.top + num("h", 560);
     g_ovTopmost     = j.find("\"top\":false") == std::string::npos;
     g_ovWantOn      = j.find("\"on\":true") != std::string::npos;
+    if (j.find("\"ct\":false") != std::string::npos) g_ovClickThrough = false;
 }
 
 void LayoutOverlay() {
@@ -620,10 +622,53 @@ void LayoutOverlay() {
     g_ovCtrl->put_Bounds(rc);
 }
 
+
+// ---- 浮窗的"点击穿透"与热键 ----
+//   抢鼠标的根因：只要是可见窗口，点在它上面就不会传给游戏。仅靠 WS_EX_NOACTIVATE
+//   只能"不激活"，挡不住鼠标命中 —— 真正要的是**点击穿透**（WS_EX_TRANSPARENT|LAYERED）。
+//   但穿透后自己也点不到按钮，所以：默认穿透（只显示、完全不干扰），
+//   按全局热键 Ctrl+Alt+O 切到"可交互"来点＋添加/拖动，再按一次切回。
+bool g_ovDragging = false;
+
+void ApplyOverlayExStyle() {
+    if (!g_ovHwnd) return;
+    LONG_PTR ex = ::GetWindowLongPtrW(g_ovHwnd, GWL_EXSTYLE);
+    ex |= WS_EX_TOOLWINDOW;
+    if (g_ovTopmost) ex |= WS_EX_TOPMOST; else ex &= ~WS_EX_TOPMOST;
+    if (g_ovClickThrough) ex |= (WS_EX_TRANSPARENT | WS_EX_LAYERED);   // 点击穿到下层（游戏）
+    else                  ex &= ~(LONG_PTR)(WS_EX_TRANSPARENT | WS_EX_LAYERED);
+    if (g_ovDragging)     ex &= ~(LONG_PTR)WS_EX_NOACTIVATE;           // 拖动期间允许激活，否则移动循环不启动
+    else                  ex |= WS_EX_NOACTIVATE;                      // 平时不抢焦点
+    ::SetWindowLongPtrW(g_ovHwnd, GWL_EXSTYLE, ex);
+    ::SetWindowPos(g_ovHwnd, nullptr, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+void OverlaySetClickThrough(bool on) {
+    g_ovClickThrough = on;
+    ApplyOverlayExStyle();
+    SaveOverlayPrefs();
+    LogLine("overlay: clickThrough=%d", (int)on);
+    const std::string ev = std::string("{\"event\":\"overlay\",\"data\":{\"visible\":") +
+                           (OverlayVisible() ? "true" : "false") + ",\"clickThrough\":" +
+                           (on ? "true" : "false") + "}}";
+    if (g_ovCtrl) PostJsonToOverlay(ev);
+    PostJson(ev);
+}
+
+// 全局热键（Ctrl+Alt+O）切换穿透；注册失败也不影响其它功能
+void RegisterOverlayHotkey() {
+    if (!g_hwnd) return;
+    if (::RegisterHotKey(g_hwnd, 21, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'O'))
+        LogLine("overlay: hotkey Ctrl+Alt+O registered (toggle click-through)");
+    else
+        LogLine("overlay: hotkey register failed (err=%lu) —— 可用捕获面板的「穿透」按钮切换", ::GetLastError());
+}
 LRESULT CALLBACK OvWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // ★ WS_EX_NOACTIVATE 下系统不会执行标题栏拖动 → 自己进移动循环
     if (msg == WM_NCLBUTTONDOWN && wp == HTCAPTION) {
-        ::ReleaseCapture();
+        g_ovDragging = true; ApplyOverlayExStyle();   // 拖动期间允许激活，否则移动循环不启动
+        ::SetTimer(hwnd, 12, 200, nullptr);          // 兜底：万一收不到 WM_EXITSIZEMOVE
         ::SendMessageW(hwnd, WM_SYSCOMMAND, SC_MOVE | 0x0002, 0);   // 0x0002 = 用鼠标移动
         return 0;
     }
@@ -645,9 +690,12 @@ LRESULT CALLBACK OvWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     switch (msg) {
         case WM_SIZE: LayoutOverlay(); return 0;
-        case WM_MOVE: case WM_EXITSIZEMOVE: SaveOverlayPrefs(); return 0;
+        case WM_MOVE: SaveOverlayPrefs(); return 0;
+        case WM_EXITSIZEMOVE: { ::KillTimer(hwnd, 12); g_ovDragging = false; ApplyOverlayExStyle(); SaveOverlayPrefs(); return 0; }
+        case WM_HOTKEY: if (wp == 21) { OverlaySetClickThrough(!g_ovClickThrough); return 0; } break;
         case WM_CLOSE: ::ShowWindow(hwnd, SW_HIDE); SaveOverlayPrefs(); return 0;   // 关 = 隐藏，下次还能开
         case WM_TIMER:
+            if (wp == 12) { ::KillTimer(hwnd, 12); g_ovDragging = false; ApplyOverlayExStyle(); return 0; }
             if (wp == 11) { SaveOverlayPrefs(); return 0; }
             return 0;
     }
@@ -691,6 +739,8 @@ void CreateOverlayWindow() {
     if (!g_ovHwnd) { LogLine("overlay: CreateWindowExW failed"); return; }
     LogLine("overlay: window created %ldx%ld topmost=%d",
             g_ovRect.right - g_ovRect.left, g_ovRect.bottom - g_ovRect.top, (int)g_ovTopmost);
+    ApplyOverlayExStyle();   // 默认点击穿透（不干扰游戏）
+    RegisterOverlayHotkey();
 
     if (!g_env) return;
     g_env->CreateCoreWebView2Controller(
