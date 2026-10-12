@@ -340,8 +340,7 @@ void OnMessage(const std::string& text) {
                  ",\"topmost\":" + (g_ovTopmost ? "true" : "false") + "}}";
         PostJson(std::string("{\"event\":\"overlay\",\"data\":{\"visible\":") +
                  (OverlayVisible() ? "true" : "false") + "}}");
-    }
-    result = g_core.Handle(env.method, env.params);
+    } else result = g_core.Handle(env.method, env.params);   // ★ 必须是 else：否则会覆盖上面 overlay 的结果
     } catch (const std::exception& ex) {
         result = std::string("{\"ok\":false,\"error\":\"") + ex.what() + "\"}";
     } catch (...) {
@@ -688,9 +687,20 @@ void CreateOverlayWindow() {
                     EventRegistrationToken tok{};
                     wv->add_NavigationCompleted(
                         Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                            [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* a) -> HRESULT {
+                            [](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* a) -> HRESULT {
                                 BOOL ok = FALSE;
                                 a->get_IsSuccess(&ok);
+                                // 自检：浮窗模式是否生效（只显示捕获面板）
+                                if (sender) sender->ExecuteScript(
+                                    L"(function(){try{var h=document.querySelector('.app > header.brand');"
+                                    L"var c=document.querySelector('#mainEntries > .capture');"
+                                    L"return 'body='+document.body.className+' header='+(h?getComputedStyle(h).display:'?')+"
+                                    L"' cap='+(c?getComputedStyle(c).display:'?');}catch(e){return 'EXC:'+e.message;}})()",
+                                    Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                                        [](HRESULT hr2, LPCWSTR json) -> HRESULT {
+                                            if (SUCCEEDED(hr2)) LogLine("overlay: mode check %s", WideToUtf8(json ? json : L"(null)").c_str());
+                                            return S_OK;
+                                        }).Get());
                                 LogLine("overlay: nav completed success=%d", (int)ok);
                                 return S_OK;
                             }).Get(), &tok);

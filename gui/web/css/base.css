@@ -200,7 +200,7 @@ main>*{min-width:0}
 .combo-new button{font-size:11.5px; padding:5px 0}
 
 /* 中栏 */
-.cbar{display:flex; gap:9px; padding:11px 13px; flex:none; border-bottom:var(--bw) solid var(--line)}
+.cbar{display:flex; gap:9px; padding:11px 13px; flex:none; align-items:center; border-bottom:var(--bw) solid var(--line)}
 .cbar input{flex:1}
 .tablewrap{flex:1; overflow:auto; min-height:0}
 .tablewrap.small{max-height:340px; border:var(--bw) solid var(--line); border-radius:8px}
@@ -731,23 +731,28 @@ td .snd .badge.judge{background:var(--accent, #0a84ff); color:var(--on-accent, #
 .center .cbar label.inline .lbltxt{line-height:1.2}
 /* ★ 硬兜底：工具栏标签固定单行高度。前面查过 checkbox=17px、文字=19px 单行，
    但标签盒子仍被撑到 36px（有其它规则在拉伸），这里直接锁死高度，视觉与行高都稳定。 */
-.center .cbar label.inline{height:24px; min-height:24px; max-height:24px; padding:0; margin:0;
+.center .cbar label.inline{height:auto; padding:0; margin:0; align-self:center;
   display:inline-flex; flex-direction:row; flex-wrap:nowrap; align-items:center; line-height:24px}
 .center .cbar label.inline input[type=checkbox]{height:17px; width:17px; min-height:17px; max-height:17px;
   align-self:center; flex:none}
 
+
 /* ===========================================================================
    捕获浮窗模式（index.html#overlay）：只留捕获面板，其余全部隐藏
+   ★ 页面结构是 body > .app > (header/toolbar/opts/main/footer)，所以选择器必须走 .app，
+     之前写成 body > header 之类，一条都没匹配上（实测浮窗里显示了整个界面）。
    =========================================================================== */
-body.overlay-mode > header.brand,
-body.overlay-mode > .toolbar,
-body.overlay-mode > .opts,
-body.overlay-mode > footer.status,
-body.overlay-mode > #mainBank { display:none !important; }
-body.overlay-mode #mainEntries{display:block !important; padding:0 !important; margin:0 !important;
-  grid-template-columns:1fr !important; height:100vh !important}
-body.overlay-mode #mainEntries > .rail,
-body.overlay-mode #mainEntries > .center { display:none !important; }
-body.overlay-mode #mainEntries > .capture{display:flex !important; margin:0 !important; border:0 !important;
-  border-radius:0 !important; height:100vh !important; box-shadow:none !important}
-body.overlay-mode .capture .phead{border-radius:0}
+html.overlay-mode{overflow:hidden}
+html.overlay-mode .app > header.brand,
+html.overlay-mode .app > .toolbar,
+html.overlay-mode .app > .opts,
+html.overlay-mode .app > footer.status,
+html.overlay-mode .app > #mainBank { display:none !important; }
+html.overlay-mode .app{padding:0 !important; gap:0 !important; height:100vh !important}
+html.overlay-mode #mainEntries{display:block !important; padding:0 !important; margin:0 !important;
+  height:100vh !important}
+html.overlay-mode #mainEntries > .rail,
+html.overlay-mode #mainEntries > .center { display:none !important; }
+html.overlay-mode #mainEntries > .capture{display:flex !important; margin:0 !important; border:0 !important;
+  border-radius:0 !important; height:100vh !important; max-height:100vh !important; box-shadow:none !important}
+html.overlay-mode .capture .phead{border-radius:0}

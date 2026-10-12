@@ -177,14 +177,22 @@ const Capture = (() => {
         el('span', { class: 'dim', text: (L.questState === 2 ? '任务中' : (L.questState >= 0 ? '非任务' : '')) + peace })));
     }
 
-    // 视图切换
+    // 视图切换 + 浮窗按钮（浮窗放在捕获界面里）
     host.appendChild(el('div', { class: 'viewswitch' },
       el('button', { class: 'vs' + (S.view === 'derived' ? ' on' : ''), text: '派生捕获',
         onclick: () => { S.view = 'derived'; render(); } }),
       el('button', { class: 'vs' + (S.view === 'wem' ? ' on' : ''), text: 'WEM 音效',
         onclick: () => { S.view = 'wem'; render(); } }),
       (L.efxEnabled ? el('button', { class: 'vs' + (S.view === 'efx' ? ' on' : ''), text: '武器特效',
-        onclick: () => { S.view = 'efx'; render(); } }) : null)));
+        onclick: () => { S.view = 'efx'; render(); } }) : null),
+      el('button', { class: 'vs', text: '浮窗', title: '把捕获记录放到独立的置顶小窗口（游戏全屏时也能看）',
+        onclick: async () => {
+          try {
+            const r = await a.Backend.call('overlay.toggle', {});
+            const v = r && r.data ? r.data.visible : false;
+            a.toast(v ? '捕获浮窗已打开（置顶显示捕获记录）' : '捕获浮窗已关闭', 'ok');
+          } catch (e) { a.toast('浮窗操作失败：' + e.message, 'err'); }
+        } })));
 
     // 过滤提示（显式 + 一键清除 + 隐藏条数）
     const allDer = L.der || [], allWem = L.wem || [];
