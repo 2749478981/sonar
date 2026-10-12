@@ -518,6 +518,11 @@ function applyFilter() {
   // 【默认列出全部条目，不按激活组合隐藏】—— 原版只列激活组合的条目，
   // 结果条目一旦落到别的组合里，用户就以为"条目消失了"。现在默认全列，
   // 非激活的打个「未激活」标记；想要旧行为可以勾「只看激活组合」。
+  // 浮窗（对比面板）：自动只列"当前武器"的条目 —— 否则几百条根本没法比对
+  if (document.documentElement.classList.contains('overlay-mode')) {
+    const lw = (ST.live && ST.live.weapon >= 0) ? ST.live.weapon : -1;
+    if (lw >= 0) list = list.filter(x => x.e.weaponType === lw || x.e.weaponType < 0);
+  }
   if (ST.weaponFilter === -2) list = list.filter(x => x.e.weaponType < 0);
   else if (ST.weaponFilter >= 0) list = list.filter(x => x.e.weaponType === ST.weaponFilter);
   if (ST.onlyActive) list = list.filter(x => entryActive(x.e));
@@ -2075,7 +2080,7 @@ async function refresh() {
   const s = await Backend.call('state', {});
   ST.version = s.version;
   // ★ 浮窗页面（index.html#overlay）：只显示捕获面板，其余全隐藏（见 CSS .overlay-mode）
-  if (location.hash === '#overlay') document.body.classList.add('overlay-mode');
+  if (location.hash === '#overlay') document.documentElement.classList.add('overlay-mode');   // 与 head 里的同步标记一致
   ST.themes = s.themes || [];
   ST.weapons = s.weapons || [];
   ST.anyCount = s.anyCount || 0;

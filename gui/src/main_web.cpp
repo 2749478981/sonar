@@ -720,8 +720,10 @@ void CreateOverlayWindow() {
                                 if (sender) sender->ExecuteScript(
                                     L"(function(){try{var h=document.querySelector('.app > header.brand');"
                                     L"var c=document.querySelector('#mainEntries > .capture');"
+                                    L"var ce=document.querySelector('#mainEntries > .center');"
+                                    L"var rw=document.querySelectorAll('#entryBody tr').length;"
                                     L"return 'body='+document.body.className+' header='+(h?getComputedStyle(h).display:'?')+"
-                                    L"' cap='+(c?getComputedStyle(c).display:'?');}catch(e){return 'EXC:'+e.message;}})()",
+                                    L"' cap='+(c?getComputedStyle(c).display:'?')+' center='+(ce?getComputedStyle(ce).display:'?')+' rows='+rw;}catch(e){return 'EXC:'+e.message;}})()",
                                     Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
                                         [](HRESULT hr2, LPCWSTR json) -> HRESULT {
                                             if (SUCCEEDED(hr2)) LogLine("overlay: mode check %s", WideToUtf8(json ? json : L"(null)").c_str());
