@@ -655,7 +655,8 @@ void CreateOverlayWindow() {
         }
     }
     g_ovHwnd = ::CreateWindowExW(
-        g_ovTopmost ? WS_EX_TOPMOST : 0, L"SonarOverlayWnd", L"Sonar 捕获记录",
+        (g_ovTopmost ? WS_EX_TOPMOST : 0) | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,   // ★ 不抢焦点、不进 Alt+Tab（否则切到游戏会被它抢鼠标）
+        L"SonarOverlayWnd", L"Sonar 捕获记录",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_SIZEBOX,
         g_ovRect.left, g_ovRect.top, g_ovRect.right - g_ovRect.left, g_ovRect.bottom - g_ovRect.top,
         nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);

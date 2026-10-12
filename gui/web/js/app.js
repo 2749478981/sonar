@@ -774,6 +774,8 @@ function renderLive() {
   if (typeof Capture !== 'undefined') Capture.render();
 }
 /* 派生捕获 → 添加/编辑条目（按 fsm/lmt 触发） */
+const overlayMode = () => document.documentElement.classList.contains('overlay-mode');   // 浮窗里不弹大编辑窗
+
 async function captureToEntry(r) {
   const fsm = r.fsm;
   if (fsm == null || fsm < 0) { toast('这条记录没有 fsm，无法添加', 'err'); return; }
@@ -788,7 +790,7 @@ async function captureToEntry(r) {
     (e.lmtAny || (Array.isArray(e.lmt) && (lmt < 0 || e.lmt.includes(lmt)))));
   if (hit >= 0) {
     const idx = ST.entries[hit].index != null ? ST.entries[hit].index : hit;
-    openEditor(idx);
+    if (overlayMode()) { toast('已有这个动作的条目，请回主界面编辑'); return; }
     toast('已有这个动作的条目，已打开编辑', 'ok');
     return;
   }
@@ -805,7 +807,7 @@ async function captureToEntry(r) {
   try {
     const res = await Backend.call('entries.save', { index: null, entry });
     await refresh();
-    if (res && res.index != null) openEditor(res.index);
+    if (overlayMode()) toast('已添加到 GUI 条目列表，请回主界面编辑'); else if (res && res.index != null) openEditor(res.index);
     toast('已添加条目（配好音效后记得保存）', 'ok');
   } catch (e) { toast('添加失败：' + e.message, 'err'); }
 }
@@ -837,7 +839,7 @@ async function addWemRecord(r) {
     e.media === media && (w < 0 || e.weaponType === w) && (e.combo || '') === combo);
   if (hit >= 0) {
     const idx = ST.entries[hit].index != null ? ST.entries[hit].index : hit;
-    openEditor(idx);
+    if (overlayMode()) { toast('已添加到 GUI 条目列表，请回主界面编辑'); return; }
     toast('当前组合已有这个 wem，已打开编辑', 'ok');
     return;
   }
@@ -852,7 +854,7 @@ async function addWemRecord(r) {
   try {
     const res = await Backend.call('entries.save', { index: null, entry });
     await refresh();
-    if (res && res.index != null) openEditor(res.index);
+    if (overlayMode()) toast('已添加到 GUI 条目列表，请回主界面编辑'); else if (res && res.index != null) openEditor(res.index);
     toast('已添加 wem 条目（触发方式 = media id，配好音效后记得保存）', 'ok');
   } catch (e) { toast('添加失败：' + e.message, 'err'); }
 }
