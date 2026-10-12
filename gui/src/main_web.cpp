@@ -515,6 +515,8 @@ void ProbePage() {
         L"var st=document.getElementById('statusText');"
         L"var stat=document.querySelector('.capHost .capstat');"
         L"var filt=document.querySelector('.capHost .capfilter');"
+        L"var dw=document.getElementById('dllWarn');"
+        L"var dwS=dw?(dw.hidden?'hidden':'shown'):'missing';"
         L"var ct=hm?(hm.textContent||'').replace(/\\s+/g,' ').slice(0,110):'(none)';"
         L"var wemView=(function(){"
         L"if(typeof Capture==='undefined'||!hm)return 'nocap';"
@@ -544,7 +546,7 @@ void ProbePage() {
         L"logoOk:(logo?logo.naturalWidth>0:null),"
         L"capType:(typeof Capture),api:apiInfo,hosts:hosts.length,capRows:cm+'/'+cb,view:view,"
         L"layout:layout,wemView:wemView,capStat:(stat?stat.textContent:''),capFilter:(filt?filt.textContent:''),"
-        L"capText:ct,status:(st?st.textContent:'')"
+        L"capText:ct,dllWarn:dwS,status:(st?st.textContent:'')"
         L"});})()",
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
             [](HRESULT, LPCWSTR json) -> HRESULT {
@@ -969,6 +971,10 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
             if (b != std::string::npos) wp = envJson.substr(a, b - a);
         }
         LogLine("wwise: %s", wp.empty() ? "未找到 WwiseConsole.exe（装了 Wwise 需重启本工具；非 C/D/E 盘现已支持）" : wp.c_str());
+    }
+    {   // 插件 DLL 是否旧了（本地判定）：排查"更新后 DLL 没换成"用
+        const std::string st = g_core.Handle("state", "{}");
+        LogLine("dllStale: %s", st.find("\"dllStale\":true") != std::string::npos ? "true（DLL 比 exe 旧：上次更新时游戏在运行没换成）" : "false");
     }
     ::ShowWindow(hwnd, SW_SHOW);
     ::UpdateWindow(hwnd);

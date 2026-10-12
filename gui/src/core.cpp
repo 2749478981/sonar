@@ -1381,6 +1381,7 @@ struct Core::Impl {
     std::atomic<bool> updInstalling{false};
     std::atomic<bool> updNeedRestart{false};
     std::atomic<bool> updSameVer{false};   // 同版本号但仓库资产更新（热修复包）
+    std::atomic<bool> updDllStale{ false };   // 插件 DLL 不是最新（游戏在跑时无法替换）
     std::atomic<bool> updIniPending{false};
     std::atomic<bool> updStarted{false};
     std::mutex updMx;
@@ -1689,6 +1690,38 @@ struct Core::Impl {
         return u.QuadPart / 10000000ULL - 11644473600ULL;   // FILETIME → Unix 秒
     }
     // 本地 exe（配置工具自身）的写入时间 → Unix 秒（UTC）
+// 插件 DLL 的写入时间（UTC 秒）：判断"上次更新有没有真的换成 DLL"（游戏在跑时换不了）
+static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
+    if (pluginsDir.empty()) return 0;
+    std::string dir = pluginsDir;                                   // 规范化：确保以反斜杠结尾
+    if (!dir.empty() && dir.back() != '\\' && dir.back() != '/') dir += '\\';
+    const std::string p = dir + "WeaponSoundEnhance.dll";
+    HANDLE h = ::CreateFileW(Utf8ToWide(p).c_str(), GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    FILETIME ft{};
+    const BOOL ok = ::GetFileTime(h, nullptr, nullptr, &ft);
+    ::CloseHandle(h);
+    if (!ok) return 0;
+    ULARGE_INTEGER u; u.LowPart = ft.dwLowDateTime; u.HighPart = ft.dwHighDateTime;
+    return u.QuadPart / 10000000ULL - 11644473600ULL;
+}
+
+    // 带 5 秒缓存的"插件 DLL 是不是旧的"判定（轮询里频繁调用，别每次都读文件）
+    bool DllStaleCached() const {
+        static unsigned long long sLast = 0;
+        static bool sOld = false;
+        const unsigned long long nowMs = ::GetTickCount64();
+        if (nowMs - sLast > 5000) {
+            sLast = nowMs;
+            const unsigned long long dt = DllWriteTimeUtc(BaseDir() + "..");
+            const unsigned long long et = ExeWriteTimeUtc();
+            sOld = (dt > 0 && et > 0 && dt + 600 < et);
+        }
+        return sOld;
+    }
+
     static unsigned long long ExeWriteTimeUtc() {
         wchar_t p[MAX_PATH * 2] = {};
         if (!::GetModuleFileNameW(nullptr, p, MAX_PATH * 2)) return 0;
@@ -2641,6 +2674,7 @@ struct Core::Impl {
                                : std::string()));
         d.set("added", JVal(live.inScene && IsCapturedAdded(live.weapon, live.fsm, live.lmt)));
         d.set("matches", JVal(live.inScene ? CapturedMatchCount(live.weapon, live.fsm, live.lmt) : 0));
+        d.set("dllStale", JVal(DllStaleCached()));   // 随实时推送一起给界面（不依赖联网检查）
         d.set("wemMedia", JVal(curWemMedia));      // 最近一次 wem 播放（无则 -1）
         d.set("wemName", JVal(curWemName.empty() ? std::string() : curWemName));
         d.set("wemDispName", JVal(curWemMedia > 0 ? WemDispName((int)curWemMedia, curWemName, curWemBank) : std::string()));
@@ -2853,7 +2887,22 @@ struct Core::Impl {
         d.set("installing", JVal(updInstalling.load()));
         d.set("needRestart", JVal(updNeedRestart.load()));
         d.set("sameVer", JVal(updSameVer.load()));   // 版本号相同但仓库资产更新（热修复包）
+        {
+            // ★ 本地判定（不依赖联网）：DLL 明显比 GUI exe 旧（>10 分钟）= 上次更新时被游戏占用没换成。
+            //   缓存 5 秒，避免每 100ms 轮询都读文件。
+            static unsigned long long sLast = 0;
+            static bool sOld = false;
+            const unsigned long long nowMs = ::GetTickCount64();
+            if (nowMs - sLast > 5000) {
+                sLast = nowMs;
+                const unsigned long long dt = DllWriteTimeUtc(BaseDir() + "..");
+                const unsigned long long et = ExeWriteTimeUtc();
+                sOld = (dt > 0 && et > 0 && dt + 600 < et);
+            }
+            d.set("dllStale", JVal(updDllStale.load() || sOld));
+        }
         d.set("version", JVal(std::string(kWseGuiVersion)));
+        d.set("dllStale", JVal(DllStaleCached()));   // 插件 DLL 比 exe 旧 = 上次更新被游戏占用没换成
         std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(updMx));
         d.set("tag", JVal(updTag));
         d.set("url", JVal(updUrl));
@@ -3425,6 +3474,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
         // ---------------- 基础状态 ----------------
         if (method == "state") {
             JVal d = JVal::obj();
+            d.set("dllStale", JVal(im->DllStaleCached()));   // ★ 插件 DLL 比 exe 旧 = 上次更新被游戏占用没换成（本地判定，不依赖联网）
             d.set("version", JVal(std::string(kWseGuiVersion)));
             d.set("exeDir", JVal(ToSlash(im->exeDir)));
             d.set("dataDir", JVal(ToSlash(im->BaseDir())));
@@ -4827,6 +4877,13 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                         if (remote > 0 && local > 0 && remote > local + 600) sameVerNewer = true;   // 10 分钟容差
                     }
                     imp->updSameVer.store(sameVerNewer);
+                    {
+                        // ★ DLL 明显比 GUI exe 旧（>10 分钟）→ 上次更新时被游戏占用没换成
+                        const unsigned long long dt = Impl::DllWriteTimeUtc(imp->BaseDir() + "..");   // 插件目录 = GUI 目录上一级
+                        const unsigned long long et = Impl::ExeWriteTimeUtc();
+                        const bool dllOld = (dt > 0 && et > 0 && dt + 600 < et);
+                        imp->updDllStale.store(cmp > 0 || sameVerNewer || dllOld);
+                    }
                     imp->updState.store((cmp > 0 || sameVerNewer) ? 3 : 2);
                 }).detach();
             }
@@ -5499,7 +5556,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             const std::string outDir = Trim(p.optStr("outDir"));
             if (path.empty()) return ErrJson("缺少 path");
             const JVal* jr = p.find("replacements");
-            if (!jr || !jr->isArr() || jr->a.empty()) return ErrJson("还没有要替换的音效");
+            if (!jr || !jr->isArr()) return ErrJson("缺少 replacements");   // 允许为空：只是想导出到游戏目录听效果
             bankmod::BankFile bf;
             std::string err;
             if (!bankmod::LoadBank(Utf8ToWide(path), bf, err)) return ErrJson(err);
@@ -5512,7 +5569,21 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 if (media <= 0 || wem.empty()) continue;
                 reps.push_back(std::make_pair((uint32_t)media, Utf8ToWide(wem)));
             }
-            if (reps.empty()) return ErrJson("替换列表为空");
+            std::wstring outDirW0;
+            if (!outDir.empty()) outDirW0 = Utf8ToWide(outDir);
+            else if (!im->cfg.global.bankOutDir.empty()) outDirW0 = Utf8ToWide(im->cfg.global.bankOutDir);
+            else outDirW0 = Utf8ToWide(im->BaseDir()) + L"wemmod";
+            if (reps.empty()) {
+                // ★ 没有替换音效：直接把原 bank 复制到输出目录（用户可能只是想放进去听效果）
+                ::CreateDirectoryW(outDirW0.c_str(), nullptr);
+                const std::wstring dst0 = outDirW0 + L"\\" + Utf8ToWide(bf.name) + L".nbnk";
+                if (!::CopyFileW(Utf8ToWide(path).c_str(), dst0.c_str(), FALSE)) return ErrJson("复制到输出目录失败");
+                JVal d0 = JVal::obj();
+                d0.set("out", JVal(ToSlash(Utf8FromWide(dst0))));
+                d0.set("replaced", JVal(0));
+                d0.set("copied", JVal(true));
+                return OkJson(d0);
+            }
 
             std::wstring outDirW;
             if (!outDir.empty()) outDirW = Utf8ToWide(outDir);

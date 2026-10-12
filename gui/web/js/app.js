@@ -1571,15 +1571,20 @@ async function setHotkey(key, code) {
 }
 
 function refreshUpdate() {
+  // ★ 插件 DLL 不是最新（游戏在运行时更新无法替换 DLL）→ 状态栏常驻警告 + 弹窗说明
+  {
+    const dw = document.getElementById('dllWarn');
+    if (dw) dw.hidden = !(ST.upd && ST.upd.dllStale);
+  }
   // ★ 游戏在运行时，插件 DLL 被占用：更新前先提醒（否则用户以为更新成功、其实没换）
   const running = !!(ST.live && ST.live.attached);
   const hint = $('#updDllHint');
   if (hint) {
-    hint.hidden = !running;
-    hint.textContent = running
-      ? '⚠ 游戏正在运行：更新时插件 DLL 无法替换（文件被占用）。建议先关闭游戏再更新；'
-        + '若只更新了数据文件，DLL 会在你关闭游戏后重新点「立即更新」时替换。'
-      : '';
+    const stale = !!(ST.upd && ST.upd.dllStale);
+    hint.hidden = !(running || stale);
+    hint.textContent = stale
+      ? ('⚠ 插件 DLL 不是最新版：' + (running ? '游戏正在运行，无法替换 DLL。' : '') + '请关闭游戏后点「立即更新」。')
+      : (running ? '⚠ 游戏正在运行：更新时插件 DLL 无法替换，建议先关闭游戏再更新。' : '');
   }
   const u = ST.upd;
   $('#updCur').textContent = 'v' + (ST.version || '—');
@@ -2076,6 +2081,7 @@ async function loadEntries() {
 async function refresh() {
   const s = await Backend.call('state', {});
   ST.version = s.version;
+  { const dw = document.getElementById('dllWarn'); if (dw) dw.hidden = !s.dllStale; }   // 插件 DLL 旧了就在状态栏警告（不依赖游戏/联网）
   // ★ 浮窗页面（index.html#overlay）：只显示捕获面板，其余全隐藏（见 CSS .overlay-mode）
   if (location.hash === '#overlay') document.documentElement.classList.add('overlay-mode');   // 与 head 里的同步标记一致
   ST.themes = s.themes || [];
@@ -2250,6 +2256,8 @@ Backend.onEvent(ev => {
     }
   if (ev.event === 'live') {
     ST.live = Object.assign(ST.live, ev.data || {});
+      // 插件 DLL 是否旧了（本地判定，随实时推送带过来）：状态栏常驻警告
+      { const dw = document.getElementById('dllWarn'); if (dw) dw.hidden = !(ST.live && ST.live.dllStale); }
     renderLive();
   } else if (ev.event === 'update') {
     ST.upd = Object.assign(ST.upd, ev.data || {});
