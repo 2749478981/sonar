@@ -469,6 +469,7 @@ void ProbePage() {
         L"var hm=document.querySelector('.capHost[data-page=\"main\"]');"
         L"var hb=document.querySelector('.capHost[data-page=\"bank\"]');"
         L"var cm=hm?hm.querySelectorAll('.hrec').length:-1;"
+        L"var cb=hb?hb.querySelectorAll('.hrec').length:-1;"
         L"var vs=document.querySelectorAll('.capHost .viewswitch .vs');"
         L"var view=vs.length?((vs[0].className.indexOf('on')>=0)?'derived':'wem'):'none';"
         L"var st=document.getElementById('statusText');"
