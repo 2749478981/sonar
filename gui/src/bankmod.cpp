@@ -91,46 +91,45 @@ std::string ToUtf8(const std::wstring& w) {
 }  // namespace
 
 std::wstring FindWwiseConsole() {
+    // 1) 环境变量 WWISEROOT（Wwise Launcher 安装后会设置；但它是"给新进程"的，
+    //    装完 Wwise 必须**重启配置工具**才能读到）
     wchar_t buf[MAX_PATH * 2] = {};
     DWORD n = ::GetEnvironmentVariableW(L"WWISEROOT", buf, MAX_PATH * 2);
     if (n > 0) {
         std::wstring p = std::wstring(buf) + L"\\Authoring\\x64\\Release\\bin\\WwiseConsole.exe";
         if (::GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) return p;
     }
-    // 常见位置兜底
-    const wchar_t* cands[] = {
-        L"C:\\Program Files (x86)\\Audiokinetic",
-        L"C:\\Program Files\\Audiokinetic",
-        L"D:\\Audiokinetic", L"E:\\Audiokinetic",
-        L"D:\\Program Files (x86)\\Audiokinetic", L"E:\\Program Files (x86)\\Audiokinetic",
-    };
-    for (const wchar_t* root : cands) {
-        std::wstring pat = std::wstring(root) + L"\\*\\Authoring\\x64\\Release\\bin\\WwiseConsole.exe";
-        WIN32_FIND_DATAW fd{};
-        HANDLE h = ::FindFirstFileW(pat.c_str(), &fd);
-        if (h != INVALID_HANDLE_VALUE) {
-            std::wstring found = std::wstring(root) + L"\\" + fd.cFileName;
-            // fd.cFileName 只是第一段，这里换用完整搜索
-            ::FindClose(h);
-            // 用 FindFirstFile 的通配无法拿到中间目录名，改用枚举一层目录
-            std::wstring dirPat = std::wstring(root) + L"\\*";
-            WIN32_FIND_DATAW dd{};
-            HANDLE dh = ::FindFirstFileW(dirPat.c_str(), &dd);
-            if (dh != INVALID_HANDLE_VALUE) {
-                do {
-                    if (!(dd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
-                    if (dd.cFileName[0] == L'.') continue;
-                    std::wstring p = std::wstring(root) + L"\\" + dd.cFileName +
-                                     L"\\Authoring\\x64\\Release\\bin\\WwiseConsole.exe";
-                    if (::GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                        ::FindClose(dh);
-                        return p;
-                    }
-                } while (::FindNextFileW(dh, &dd));
-                ::FindClose(dh);
+    // 2) 常见位置兜底：**扫描所有固定磁盘**（以前只扫 C/D/E，装在别的盘就"检测不到"）
+    std::vector<std::wstring> roots;
+    {
+        wchar_t drives[512] = {};
+        if (::GetLogicalDriveStringsW(511, drives) > 0) {
+            for (const wchar_t* d = drives; *d; d += wcslen(d) + 1) {
+                if (::GetDriveTypeW(d) != DRIVE_FIXED) continue;
+                const std::wstring dr(d);   // 形如 "F:\"
+                const wchar_t* subs[] = { L"Audiokinetic", L"Program Files\\Audiokinetic",
+                                          L"Program Files (x86)\\Audiokinetic", L"Wwise" };
+                for (const wchar_t* s : subs) roots.push_back(dr + s);
             }
-            (void)found;
         }
+    }
+    for (const std::wstring& root : roots) {
+        std::wstring dirPat = root + L"\\*";
+        WIN32_FIND_DATAW dd{};
+        HANDLE dh = ::FindFirstFileW(dirPat.c_str(), &dd);
+        if (dh == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (!(dd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+            if (dd.cFileName[0] == L'.') continue;
+            // <root>\<版本>\Authoring\x64\Release\bin\WwiseConsole.exe
+            const std::wstring p = root + L"\\" + dd.cFileName +
+                                   L"\\Authoring\\x64\\Release\\bin\\WwiseConsole.exe";
+            if (::GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                ::FindClose(dh);
+                return p;
+            }
+        } while (::FindNextFileW(dh, &dd));
+        ::FindClose(dh);
     }
     return std::wstring();
 }
