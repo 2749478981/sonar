@@ -20,6 +20,7 @@
 // ===========================================================================
 
 #include <windows.h>
+#include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <objbase.h>
@@ -615,6 +616,22 @@ void LayoutOverlay() {
 }
 
 LRESULT CALLBACK OvWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_NCHITTEST) {
+        // 无边框窗口：自己判定"拖标题栏 / 拉边框缩放"
+        POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        RECT r{}; ::GetWindowRect(hwnd, &r);
+        const int x = pt.x - r.left, y = pt.y - r.top;
+        const int w = r.right - r.left, h = r.bottom - r.top;
+        const int b = 6;                       // 缩放边宽
+        const bool left = x < b, right = x >= w - b, top = y < b, bot = y >= h - b;
+        if (top && left) return HTTOPLEFT;   if (top && right) return HTTOPRIGHT;
+        if (bot && left) return HTBOTTOMLEFT; if (bot && right) return HTBOTTOMRIGHT;
+        if (left) return HTLEFT;  if (right) return HTRIGHT;
+        if (top) return HTTOP;    if (bot) return HTBOTTOM;
+        // 自绘标题栏（顶部 34px）可拖动；右上角 46px 留给"关闭"按钮（要能点到网页）
+        if (y < 34 && x < w - 46) return HTCAPTION;
+        return HTCLIENT;
+    }
     switch (msg) {
         case WM_SIZE: LayoutOverlay(); return 0;
         case WM_MOVE: case WM_EXITSIZEMOVE: SaveOverlayPrefs(); return 0;
@@ -657,7 +674,7 @@ void CreateOverlayWindow() {
     g_ovHwnd = ::CreateWindowExW(
         (g_ovTopmost ? WS_EX_TOPMOST : 0) | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,   // ★ 不抢焦点、不进 Alt+Tab（否则切到游戏会被它抢鼠标）
         L"SonarOverlayWnd", L"Sonar 捕获记录",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_SIZEBOX,
+        WS_POPUP | WS_THICKFRAME,   // ★ 无原生标题栏：标题栏/关闭按钮由网页自绘（风格与 GUI 统一）
         g_ovRect.left, g_ovRect.top, g_ovRect.right - g_ovRect.left, g_ovRect.bottom - g_ovRect.top,
         nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
     if (!g_ovHwnd) { LogLine("overlay: CreateWindowExW failed"); return; }
@@ -724,7 +741,7 @@ void CreateOverlayWindow() {
                                     L"var ce=document.querySelector('#mainEntries > .center');"
                                     L"var rw=document.querySelectorAll('#entryBody tr').length;"
                                     L"return 'body='+document.body.className+' header='+(h?getComputedStyle(h).display:'?')+"
-                                    L"' cap='+(c?getComputedStyle(c).display:'?')+' center='+(ce?getComputedStyle(ce).display:'?')+' rows='+rw;}catch(e){return 'EXC:'+e.message;}})()",
+                                    L"' cap='+(c?getComputedStyle(c).display:'?')+' center='+(ce?getComputedStyle(ce).display:'?')+' rows='+rw+' ovbar='+(document.querySelector('.ovbar')?1:0);}catch(e){return 'EXC:'+e.message;}})()",
                                     Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
                                         [](HRESULT hr2, LPCWSTR json) -> HRESULT {
                                             if (SUCCEEDED(hr2)) LogLine("overlay: mode check %s", WideToUtf8(json ? json : L"(null)").c_str());

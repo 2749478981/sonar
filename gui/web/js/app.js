@@ -2078,6 +2078,17 @@ async function refresh() {
   ST.version = s.version;
   // ★ 浮窗页面（index.html#overlay）：只显示捕获面板，其余全隐藏（见 CSS .overlay-mode）
   if (location.hash === '#overlay') document.documentElement.classList.add('overlay-mode');   // 与 head 里的同步标记一致
+  // ★ 自绘标题栏：无边框窗口（C++ 用 WS_POPUP），标题栏/关闭按钮由网页画，风格与 GUI 统一。
+  //   拖动 = 宿主 WM_NCHITTEST 把顶部 34px 当 HTCAPTION；右上角 46px 留给关闭按钮（能点到网页）。
+  if (location.hash === '#overlay' && !document.querySelector('.ovbar')) {
+    const bar = document.createElement('div');
+    bar.className = 'ovbar';
+    const t = document.createElement('span'); t.className = 'ovt'; t.textContent = 'Sonar 捕获记录';
+    const x = document.createElement('button'); x.className = 'ovx'; x.title = '关闭浮窗'; x.textContent = '✕';
+    x.onclick = async () => { try { await Backend.call('overlay.hide', {}); } catch (e) {} };
+    bar.appendChild(t); bar.appendChild(x);
+    document.body.insertBefore(bar, document.body.firstChild);
+  }
   ST.themes = s.themes || [];
   ST.weapons = s.weapons || [];
   ST.anyCount = s.anyCount || 0;
