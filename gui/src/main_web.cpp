@@ -502,7 +502,7 @@ void ProbePage() {
         L"icons:ok+'/'+im.length,firstIcon:(first?first.getAttribute('src'):null),"
         L"logoOk:(logo?logo.naturalWidth>0:null),"
         L"capType:(typeof Capture),api:apiInfo,hosts:hosts.length,capRows:cm+'/'+cb,view:view,"
-        L"layout:layout"
+        L"layout:layout,wemView:wemView,capStat:(stat?stat.textContent:''),capFilter:(filt?filt.textContent:''),"
         L"capText:ct,status:(st?st.textContent:'')"
         L"});})()",
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
