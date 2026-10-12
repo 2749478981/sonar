@@ -53,6 +53,7 @@ ULONG_PTR            g_gdiToken = 0;   // GDI+ 启动令牌（启动加载画面
 ComPtr<ICoreWebView2Controller> g_ctrl;
 ComPtr<ICoreWebView2>           g_web;
 HWND                 g_hwnd = nullptr;
+ICoreWebView2Environment* g_env = nullptr;   // 浮窗要用同一个 Environment
 UINT_PTR             g_pollTimer = 0;
 bool                 g_ready = false;    // true = 网页已就绪可显示（前端发 ui.ready 后置位）
 int                  g_animPhase = 0;    // 启动加载画面的动画帧（图标呼吸/文字点点）
@@ -302,6 +303,14 @@ void Reply(long long id, const std::string& result) {
     PostJson("{\"id\":" + std::to_string(id) + "," + body.substr(1));
 }
 
+// 浮窗（定义在文件后半段）
+void ShowOverlay(bool on);
+bool OverlayVisible();
+void OverlaySetTopmost(bool on);
+void LoadOverlayPrefs();
+void PostJsonToOverlay(const std::string& json);
+extern bool g_ovTopmost;   // 定义在浮窗段（下面）
+
 void OnMessage(const std::string& text) {
     Envelope env = ParseEnvelope(text);
     if (env.method == "ui.ready") {
@@ -319,7 +328,19 @@ void OnMessage(const std::string& text) {
     if (env.method.empty()) { Reply(env.id, "{\"ok\":false,\"error\":\"missing method\"}"); return; }
     std::string result;
     try {
-        result = g_core.Handle(env.method, env.params);
+        // ---- 捕获浮窗：由宿主自己处理（窗口/控制器都在宿主里） ----
+    if (env.method.rfind("overlay.", 0) == 0) {
+        if (env.method == "overlay.toggle")       ShowOverlay(!OverlayVisible());
+        else if (env.method == "overlay.show")    ShowOverlay(true);
+        else if (env.method == "overlay.hide")    ShowOverlay(false);
+        else if (env.method == "overlay.topmost") OverlaySetTopmost(env.params.find("\"on\":true") != std::string::npos ||
+                                                                   env.params.find("\"on\":1") != std::string::npos);
+        result = std::string("{\"ok\":true,\"data\":{\"visible\":") + (OverlayVisible() ? "true" : "false") +
+                 ",\"topmost\":" + (g_ovTopmost ? "true" : "false") + "}}";
+        PostJson(std::string("{\"event\":\"overlay\",\"data\":{\"visible\":") +
+                 (OverlayVisible() ? "true" : "false") + "}}");
+    }
+    result = g_core.Handle(env.method, env.params);
     } catch (const std::exception& ex) {
         result = std::string("{\"ok\":false,\"error\":\"") + ex.what() + "\"}";
     } catch (...) {
@@ -515,6 +536,172 @@ void ProbePage() {
 }
 
 
+// ===========================================================================
+//  捕获浮窗（overlay）：独立的置顶小窗口，只显示捕获历史
+//
+//  用途：游戏全屏/无边框时也能看到捕获记录。用**同一个 WebView2 Environment**
+//  再开一个控制器，页面是 index.html#overlay（前端只渲染捕获面板）。
+//  位置/尺寸/置顶开关记在 Sonar_Overlay.json，下次打开还原。
+// ===========================================================================
+HWND                    g_ovHwnd = nullptr;
+ICoreWebView2Controller* g_ovCtrl = nullptr;
+bool                    g_ovTopmost = true;
+bool                    g_ovWantOn = false;   // 上次是否开着（启动还原）
+RECT                    g_ovRect = { -1, -1, 0, 0 };   // -1 = 未初始化（首次放右上角）
+std::wstring            g_ovPrefPath;
+
+void SaveOverlayPrefs() {
+    if (g_ovPrefPath.empty()) return;
+    if (g_ovHwnd && ::IsWindowVisible(g_ovHwnd)) {
+        RECT r{};
+        ::GetWindowRect(g_ovHwnd, &r);
+        g_ovRect = r;
+    }
+    std::string j = "{\"on\":" + std::string((g_ovHwnd && ::IsWindowVisible(g_ovHwnd)) ? "true" : "false") +
+                    ",\"top\":" + std::string(g_ovTopmost ? "true" : "false") +
+                    ",\"x\":" + std::to_string(g_ovRect.left) + ",\"y\":" + std::to_string(g_ovRect.top) +
+                    ",\"w\":" + std::to_string(g_ovRect.right - g_ovRect.left) +
+                    ",\"h\":" + std::to_string(g_ovRect.bottom - g_ovRect.top) + "}";
+    HANDLE h = ::CreateFileW(g_ovPrefPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD wr = 0;
+    ::WriteFile(h, j.data(), (DWORD)j.size(), &wr, nullptr);
+    ::CloseHandle(h);
+}
+
+void LoadOverlayPrefs() {
+    if (g_ovPrefPath.empty()) return;
+    HANDLE h = ::CreateFileW(g_ovPrefPath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    char buf[512] = {0};
+    DWORD rd = 0;
+    ::ReadFile(h, buf, sizeof(buf) - 1, &rd, nullptr);
+    ::CloseHandle(h);
+    const std::string j(buf, rd);
+    auto num = [&j](const char* key, long def) -> long {
+        const std::string k = std::string("\"") + key + "\":";
+        const std::size_t p = j.find(k);
+        if (p == std::string::npos) return def;
+        return std::atol(j.c_str() + p + k.size());
+    };
+    g_ovRect.left   = num("x", -1);
+    g_ovRect.top    = num("y", -1);
+    g_ovRect.right  = g_ovRect.left + num("w", 430);
+    g_ovRect.bottom = g_ovRect.top + num("h", 560);
+    g_ovTopmost     = j.find("\"top\":false") == std::string::npos;
+    g_ovWantOn      = j.find("\"on\":true") != std::string::npos;
+}
+
+void LayoutOverlay() {
+    if (!g_ovCtrl || !g_ovHwnd) return;
+    RECT rc{};
+    ::GetClientRect(g_ovHwnd, &rc);
+    g_ovCtrl->put_Bounds(rc);
+}
+
+LRESULT CALLBACK OvWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        case WM_SIZE: LayoutOverlay(); return 0;
+        case WM_MOVE: case WM_EXITSIZEMOVE: SaveOverlayPrefs(); return 0;
+        case WM_CLOSE: ::ShowWindow(hwnd, SW_HIDE); SaveOverlayPrefs(); return 0;   // 关 = 隐藏，下次还能开
+        case WM_TIMER:
+            if (wp == 11) { SaveOverlayPrefs(); return 0; }
+            return 0;
+    }
+    return ::DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void CreateOverlayWindow() {
+    if (g_ovHwnd) return;
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = OvWndProc;
+    wc.hInstance = ::GetModuleHandleW(nullptr);
+    wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+    wc.lpszClassName = L"SonarOverlayWnd";
+    ::RegisterClassExW(&wc);
+
+    if (g_ovRect.left < 0 || g_ovRect.top < 0) {           // 首次：放屏幕右上角
+        RECT wa{};
+        ::SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+        g_ovRect.right  = wa.right - 24;
+        g_ovRect.left   = g_ovRect.right - 430;
+        g_ovRect.top    = wa.top + 24;
+        g_ovRect.bottom = g_ovRect.top + 560;
+    }
+    g_ovHwnd = ::CreateWindowExW(
+        g_ovTopmost ? WS_EX_TOPMOST : 0, L"SonarOverlayWnd", L"Sonar 捕获记录",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_SIZEBOX,
+        g_ovRect.left, g_ovRect.top, g_ovRect.right - g_ovRect.left, g_ovRect.bottom - g_ovRect.top,
+        nullptr, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+    if (!g_ovHwnd) { LogLine("overlay: CreateWindowExW failed"); return; }
+    LogLine("overlay: window created %ldx%ld topmost=%d",
+            g_ovRect.right - g_ovRect.left, g_ovRect.bottom - g_ovRect.top, (int)g_ovTopmost);
+
+    if (!g_env) return;
+    g_env->CreateCoreWebView2Controller(
+        g_ovHwnd,
+        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+            [](HRESULT hr, ICoreWebView2Controller* ctrl) -> HRESULT {
+                if (FAILED(hr) || !ctrl) { LogLine("overlay: controller failed hr=0x%08X", (unsigned)hr); return S_OK; }
+                g_ovCtrl = ctrl;
+                g_ovCtrl->AddRef();
+                g_ovCtrl->put_IsVisible(TRUE);
+                LayoutOverlay();
+                ICoreWebView2* wv = nullptr;
+                g_ovCtrl->get_CoreWebView2(&wv);
+                if (wv) {
+                    wv->Navigate(L"https://sonar.local/web/index.html#overlay");
+                    wv->Release();
+                }
+                LogLine("overlay: controller ok, navigating #overlay");
+                return S_OK;
+            }).Get());
+}
+
+void ShowOverlay(bool on) {
+    if (on) {
+        CreateOverlayWindow();
+        if (!g_ovHwnd) return;
+        ::ShowWindow(g_ovHwnd, SW_SHOW);
+        ::SetWindowPos(g_ovHwnd, g_ovTopmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ::SetTimer(g_ovHwnd, 11, 2000, nullptr);           // 定期记住位置
+    } else if (g_ovHwnd) {
+        ::KillTimer(g_ovHwnd, 11);
+        ::ShowWindow(g_ovHwnd, SW_HIDE);
+    }
+    SaveOverlayPrefs();
+    LogLine("overlay: visible=%d topmost=%d", (int)on, (int)g_ovTopmost);
+}
+
+// 把同一个事件也发给浮窗（它只显示捕获面板，需要实时数据）
+void PostJsonToOverlay(const std::string& json) {
+    if (!g_ovCtrl || !OverlayVisible()) return;
+    ICoreWebView2* wv = nullptr;
+    if (SUCCEEDED(g_ovCtrl->get_CoreWebView2(&wv)) && wv) {
+        wv->PostWebMessageAsString(Utf8ToWide(json).c_str());
+        wv->Release();
+    }
+}
+
+bool OverlayVisible() { return g_ovHwnd && ::IsWindowVisible(g_ovHwnd) != FALSE; }
+
+void OverlaySetTopmost(bool on) {
+    g_ovTopmost = on;
+    if (g_ovHwnd) {
+        ::SetWindowPos(g_ovHwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        // 重建扩展样式，保证下次显示仍是置顶
+        LONG_PTR ex = ::GetWindowLongPtrW(g_ovHwnd, GWL_EXSTYLE);
+        if (on) ex |= WS_EX_TOPMOST; else ex &= ~WS_EX_TOPMOST;
+        ::SetWindowLongPtrW(g_ovHwnd, GWL_EXSTYLE, ex);
+    }
+    SaveOverlayPrefs();
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -528,7 +715,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_TIMER:
             if (wp == 1) {
                 std::string ev = g_core.PollEvents();
-                if (!ev.empty()) PostJson(ev);
+                if (!ev.empty()) { PostJson(ev); PostJsonToOverlay(ev); }   // 浮窗也要实时数据
             } else if (wp == 2) {
                 // 首次自检：等前端把数据拉完、DOM 渲染好之后再量；之后每 15 秒复检一次
                 // （排查"捕获到底有没有在记录"这类问题，必须能连续看到数字变化）
@@ -703,11 +890,16 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     ClearWebViewCacheIfChanged(dataDir, webRoot);    // 别让旧 CSS/JS 赖在磁盘缓存里
     LogLine("dataDir=%s", WideToUtf8(dataDir).c_str());
     LogLine("webRoot=%s", WideToUtf8(webRoot).c_str());
+    // 浮窗偏好（位置/开关）放在 exe 目录，与 ini 同级；启动时还原
+    g_ovPrefPath = webRoot + L"Sonar_Overlay.json";
+    LoadOverlayPrefs();
 
     HRESULT hr = createEnv(
         nullptr, dataDir.c_str(), nullptr,
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [webRoot](HRESULT res, ICoreWebView2Environment* env) -> HRESULT {
+                g_env = env; if (g_env) g_env->AddRef();   // 浮窗复用同一个 Environment
+                if (g_ovWantOn) { ShowOverlay(true); LogLine("overlay: restored on startup"); }
                 LogLine("env handler: hr=0x%08X env=%p", (unsigned)res, (void*)env);
                 if (FAILED(res) || !env) {
                     ::MessageBoxW(g_hwnd,

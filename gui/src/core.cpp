@@ -3125,7 +3125,8 @@ std::string PickSoundFile(void* corePtr, void* owner, bool& cancelled) {
 
 // 导出核心：收集组合条目 + 把用到的音效复制到 dir\sounds\ 并改写条目路径
 bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::string& dir,
-                    std::vector<SoundEntry>& outEntries, int& copied, int& missing) {
+                    std::vector<SoundEntry>& outEntries, int& copied, int& missing,
+                    std::vector<std::string>* missingSample = nullptr) {
     Core::Impl* im = ImplOf(corePtr);
     // 路径是 UTF-8 字节串，不能逐字节转 wchar（中文子目录会乱码）：
     // 先拼成完整 UTF-8 路径，再整体 Utf8ToWide。
@@ -3168,6 +3169,7 @@ bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::s
                 }
                 if (src.empty() || ::GetFileAttributesW(src.c_str()) == INVALID_FILE_ATTRIBUTES) {
                     ++missing;                           // 找不到源文件：路径原样保留
+                    if (missingSample && missingSample->size() < 8) missingSample->push_back(sp.path);   // 让用户看到具体是哪些
                     continue;
                 }
                 std::wstring key = src;
@@ -4442,7 +4444,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
 
             std::vector<SoundEntry> exported;
             int copied = 0, missing = 0;
-            PackComboToDir(corePtr, w, combo, stage, exported, copied, missing);
+            std::vector<std::string> missingSample;   // 缺失路径样本（给用户看具体是哪些）
+            PackComboToDir(corePtr, w, combo, stage, exported, copied, missing, &missingSample);
             if (exported.empty()) {
                 DeleteTree(Utf8ToWide(stage));
                 return ErrJson("这个组合一条条目都没有，没什么可导出的");
@@ -4467,6 +4470,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             d.set("zip", JVal(ToSlash(zipPath)));
             d.set("copied", JVal(copied));
             d.set("missing", JVal(missing));
+            { JVal arr = JVal::arr(); for (std::size_t k = 0; k < missingSample.size(); ++k) arr.push(JVal(missingSample[k])); d.set("missingSample", arr); }
             d.set("entries", JVal((int)exported.size()));
             d.set("status", JVal(im->status));
             return OkJson(d);

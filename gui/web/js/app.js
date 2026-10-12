@@ -1724,7 +1724,10 @@ const ACTIONS = {
       const r = await Backend.call('combo.export', { weapon: w });
       if (r.cancelled) return;
           if (r.missing > 0) {
-            // ★ 缺音效必须醒目：否则对方导入后"只有条目没有声音"，还以为是导入坏了
+            // ★ 把具体缺失路径列出来（用户/我们才能判断是路径解析问题还是文件真不在）
+            const miss = (r.missingSample || []).map(s => '  · ' + s).join('\n');
+            const go = await confirmBox({ title: '导出完成，但有音效缺失', okText: '知道了',
+              message: `条目 ${r.entries} 条，已打包音效 ${r.copied} 个，缺失 ${r.missing} 个。\n\n缺失的路径（前几个）：\n${miss || '(无样本)'}\n\n这些音效不会进包，别人导入后需要自己放。\n若这些文件其实存在，请把上面的路径发给我排查。` });
             toast(`已导出「${ST.active[w] || '默认'}」：条目 ${r.entries} 条，音效 ${r.copied} 个，`
                   + `**${r.missing} 个音效文件缺失**。\n这个包不含缺失的音效，别人导入后需要自己放音效。\n${r.zip}`, 'err');
           } else {
@@ -1750,6 +1753,11 @@ const ACTIONS = {
   'win.fsm':    async () => { openModal('#mFsm'); await runFsmSearch(); },
   'win.hot':    async () => { openModal('#mHot'); await refreshHotkeys(); },
   'win.ids':    async () => { openModal('#mIds'); await refreshIds(); },
+  'overlay.toggle': async () => {
+    const r = await Backend.call('overlay.toggle', {});
+    const v = r && r.data ? r.data.visible : false;
+    toast(v ? '捕获浮窗已打开（置顶显示捕获记录）' : '捕获浮窗已关闭', 'ok');
+  },
   'win.update': async () => {
     openModal('#mUpd');
     const r = await Backend.call('update.check', { user: true });
@@ -2066,6 +2074,8 @@ async function loadEntries() {
 async function refresh() {
   const s = await Backend.call('state', {});
   ST.version = s.version;
+  // ★ 浮窗页面（index.html#overlay）：只显示捕获面板，其余全隐藏（见 CSS .overlay-mode）
+  if (location.hash === '#overlay') document.body.classList.add('overlay-mode');
   ST.themes = s.themes || [];
   ST.weapons = s.weapons || [];
   ST.anyCount = s.anyCount || 0;
