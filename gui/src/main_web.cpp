@@ -469,7 +469,6 @@ void ProbePage() {
         L"var hm=document.querySelector('.capHost[data-page=\"main\"]');"
         L"var hb=document.querySelector('.capHost[data-page=\"bank\"]');"
         L"var cm=hm?hm.querySelectorAll('.hrec').length:-1;"
-        L"var cb=hb?hb.querySelectorAll('.hrec').length:-1;"
         L"var vs=document.querySelectorAll('.capHost .viewswitch .vs');"
         L"var view=vs.length?((vs[0].className.indexOf('on')>=0)?'derived':'wem'):'none';"
         L"var st=document.getElementById('statusText');"
@@ -503,7 +502,7 @@ void ProbePage() {
         L"icons:ok+'/'+im.length,firstIcon:(first?first.getAttribute('src'):null),"
         L"logoOk:(logo?logo.naturalWidth>0:null),"
         L"capType:(typeof Capture),api:apiInfo,hosts:hosts.length,capRows:cm+'/'+cb,view:view,"
-        L"layout:layout,wemView:wemView,capStat:(stat?stat.textContent:''),capFilter:(filt?filt.textContent:''),"
+        L"layout:layout,m1:m1,m2:m2,m3:m3,m4:m4,d1:d1,d2:d2,tx:tx,fd:fd,nl:nl,s1:s1,s2:s2,s3:s3,wemView:wemView,capStat:(stat?stat.textContent:''),capFilter:(filt?filt.textContent:''),"
         L"capText:ct,status:(st?st.textContent:'')"
         L"});})()",
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
