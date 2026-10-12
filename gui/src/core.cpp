@@ -5709,6 +5709,75 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
         // ---------------- nbnk → 可直接分享的 Mod 压缩包 ----------------
         //  结构从 nativePC 开始：nativePC\sound\wwise\Windows\<bank>.nbnk
         //  别人解压到游戏根目录即生效（和我们的发布包同一套约定）。
+
+        // ---------------- nbnk 替换记录 ----------------
+        //  下次导入同一个 nbnk 时，显示"上次替换了哪些 wem"，并可一键恢复。
+        //  存在 exeDir\Sonar_BankMod.json：{ "banks": { "<bank名>": { time, path, reps:[{media,wem}] } } }
+        if (method == "bank.history.get" || method == "bank.history.save" || method == "bank.history.clear") {
+            const std::string hpath = Trim(p.optStr("path"));
+            if (hpath.empty()) return ErrJson("缺少 path");
+            std::size_t hsl = hpath.find_last_of("\\/");
+            const std::string hname = (hsl == std::string::npos) ? hpath : hpath.substr(hsl + 1);
+            const std::string hfile = im->exeDir + "Sonar_BankMod.json";
+            JVal root = JVal::obj();
+            {
+                std::string txt;
+                if (FsRead(hfile, txt)) {
+                    JsonParser jp(txt);
+                    JVal v;
+                    if (jp.parse(v) && v.isObj()) root = v;
+                }
+            }
+            const JVal* jb = root.find("banks");
+            JVal banks = (jb && jb->isObj()) ? *jb : JVal::obj();
+
+            if (method == "bank.history.get") {
+                const JVal* e = banks.find(hname);
+                JVal d = JVal::obj();
+                bool found = false;
+                if (e && e->isObj()) {
+                    const JVal* rr = e->find("reps");
+                    if (rr && rr->isArr() && !rr->a.empty()) {
+                        found = true;
+                        d.set("reps", *rr);
+                        const JVal* t = e->find("time");
+                        if (t) d.set("time", JVal(t->asStr()));
+                        const JVal* pp = e->find("path");
+                        if (pp) d.set("srcPath", JVal(pp->asStr()));
+                    }
+                }
+                d.set("found", JVal(found));
+                return OkJson(d);
+            }
+
+            if (method == "bank.history.clear") {
+                JVal empty = JVal::obj();          // 用空对象表示"已清除"
+                banks.set(hname, empty);
+                root.set("banks", banks);
+                std::string txt = JsonDump(root);
+                WriteWideFile(Utf8ToWide(hfile), (const void*)txt.data(), txt.size());
+                JVal d = JVal::obj();
+                d.set("cleared", JVal(true));
+                return OkJson(d);
+            }
+
+            // save
+            const JVal* jr = p.find("reps");
+            JVal e = JVal::obj();
+            e.set("time", JVal(TimeNowHms()));
+            e.set("path", JVal(ToSlash(hpath)));
+            if (jr && jr->isArr()) e.set("reps", *jr);
+            else e.set("reps", JVal::arr());
+            banks.set(hname, e);
+            root.set("banks", banks);
+            std::string txt = JsonDump(root);
+            const bool okw = WriteWideFile(Utf8ToWide(hfile), (const void*)txt.data(), txt.size());
+            if (!okw) return ErrJson("写记录文件失败");
+            JVal d = JVal::obj();
+            d.set("saved", JVal(true));
+            d.set("count", JVal((int)((jr && jr->isArr()) ? jr->a.size() : 0)));
+            return OkJson(d);
+        }
         if (method == "bank.exportModZip") {
             const std::string path = Trim(p.optStr("path"));            // 源 nbnk
             const std::string src  = Trim(p.optStr("src"));             // 可选：已导出的 nbnk（带替换）

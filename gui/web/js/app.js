@@ -863,7 +863,7 @@ async function addWemRecord(r) {
    音效替换（nbnk Mod，实验性）
    流程：导入 nbnk → 为某个 media 选音频 → 转 wem（ffmpeg+Wwise）→ 替换进 bank → 导出
    =========================================================================== */
-const BANK = { path: '', name: '', media: [], reps: {} };   // reps: mediaId -> 音频路径
+const BANK = { path: '', name: '', media: [], reps: {}, histSaved: false };   // histSaved: 本次替换是否已写进记录   // reps: mediaId -> 音频路径
 let playingMedia = 0;                                       // 正在 GUI 内播放的 media（0=无）
 
 function bankRepCount() { return Object.keys(BANK.reps).length; }
@@ -1939,7 +1939,52 @@ function showBankPage(on) {
   renderLive();   // 两个页面各有一份捕获面板（capture.js 渲染），切页只需重绘
 }
 
-ACTIONS['bank.return'] = () => { showBankPage(false); };
+// ---------------- nbnk 替换记录：导入时显示 / 恢复，导出后记住 ----------------
+function bankRepsToArr() {
+  return Object.keys(BANK.reps).map(k => ({ media: parseInt(k, 10), wem: BANK.reps[k] }))
+                                        .filter(x => x.media > 0 && x.wem);
+}
+async function bankShowHistory() {
+  const row = document.querySelector('#bankHistRow');
+  if (!row) return;
+  row.innerHTML = '';
+  if (!BANK.path) return;
+  try {
+    const h = await Backend.call('bank.history.get', { path: BANK.path });
+    if (!h.found || !(h.reps || []).length) return;
+    const n = h.reps.length;
+    const sp = document.createElement('span');
+    sp.className = 'note ok';
+    sp.style.marginRight = '8px';
+    sp.textContent = `上次替换过 ${n} 个 wem（${h.time || ''}）`;
+    const btn = document.createElement('button');
+    btn.className = 'nav';
+    btn.textContent = '恢复上次替换';
+    btn.title = h.reps.map(x => x.media + ' → ' + x.wem).join('\n');
+    btn.onclick = () => {
+      BANK.reps = {};
+      (h.reps || []).forEach(x => { if (x.media > 0 && x.wem) BANK.reps[x.media] = x.wem; });
+      BANK.histSaved = true;
+      renderBank();
+      toast(`已恢复 ${n} 个替换（文件不在的会转换时报错，可重新选音频）`, 'ok');
+    };
+    row.appendChild(sp);
+    row.appendChild(btn);
+  } catch (e) {}
+}
+ACTIONS['bank.return'] = async () => {
+  // 有替换但还没记进历史 → 问一下要不要保存（下次导入同一个 nbnk 能看见）
+  const reps = bankRepsToArr();
+  if (reps.length && !BANK.histSaved) {
+    const go = await confirmBox({ title: '要保存这次的替换记录吗？', okText: '保存', danger: false,
+      message: `这次替换了 ${reps.length} 个 wem。\n保存后，下次导入同一个 nbnk 就能看到这次替换了哪些，并可一键恢复。` });
+    if (go) {
+      try { await Backend.call('bank.history.save', { path: BANK.path, reps }); BANK.histSaved = true; toast('已保存替换记录', 'ok'); }
+      catch (e) { toast('保存失败：' + e.message, 'err'); }
+    }
+  }
+  showBankPage(false);
+};
 
 ACTIONS['win.bank'] = () => {
   // ★ 已在音效替换页面时，再点一次这个按钮 = 返回条目列表
@@ -2026,6 +2071,8 @@ ACTIONS['bank.pick'] = async () => {
     BANK.path = r.path;
     BANK.name = info.bank;
     BANK.media = info.media || [];
+    BANK.histSaved = false;
+    bankShowHistory();   // 同一个 nbnk：显示上次替换了哪些 wem（可一键恢复）
     BANK.reps = {};
     renderBank();
     if (!info.hasWwise)
@@ -2086,6 +2133,12 @@ ACTIONS['bank.export'] = async () => {
     // 2) 导出 nbnk（写新文件，不动游戏原文件）
     const out = await Backend.call('bank.export', { path: BANK.path, replacements: reps });
     toast(`已导出 ${out.replaced} 条 → ${out.out}；进游戏切换一次武器种类再切回即可生效（不用重启）`, 'ok');
+    // ★ 记住这次的替换：下次导入同一个 nbnk 会显示"上次替换了哪些 wem"，并可一键恢复
+    try {
+      await Backend.call('bank.history.save', { path: BANK.path, reps });
+      BANK.histSaved = true;
+      bankShowHistory();
+    } catch (err) {}
     $('#bankInfo').textContent =
       `导出完成：${out.out}\n把该 nbnk 放到 游戏目录\\nativePC\\sound\\wwise\\Windows\\ 下即可生效。`;
   } catch (e) {
