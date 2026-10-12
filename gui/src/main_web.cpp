@@ -352,7 +352,10 @@ void OnMessage(const std::string& text) {
     }
     Reply(env.id, result);
     // ★ 一端改了数据 → 通知另一端刷新（浮窗里「＋ 添加」后主界面要同步，反之亦然）
-    if (env.method.rfind("overlay.", 0) != 0 && !IsReadOnlyMethod(env.method)) {
+    static unsigned long long s_lastBcast = 0;
+    const unsigned long long nowB = ::GetTickCount64();
+    if (!IsReadOnlyMethod(env.method) && nowB - s_lastBcast > 500) {   // 500ms 防抖：即使漏了某个方法也不会无限互刷
+        s_lastBcast = nowB;
         const std::string ev = "{\"event\":\"refresh\"}";
         if (g_curSender && g_curSender != g_web.Get()) PostJson(ev);   // 浮窗发的 → 通知主窗口
         else PostJsonToOverlay(ev);                              // 主窗口发的 → 通知浮窗
@@ -753,8 +756,10 @@ void ShowOverlay(bool on) {
 // 把同一个事件也发给浮窗（它只显示捕获面板，需要实时数据）
 // 纯读取的方法：调用它们不会改配置，广播刷新会造成 refresh ↔ refresh 死循环
 bool IsReadOnlyMethod(const std::string& m) {
-    static const char* kRead[] = { "state", "live.", "fsm.", "ids.", "update.", "ui.", "name.", "wem.names" };
-    for (const char* p : kRead) if (m.rfind(p, 0) == 0) return true;
+    // 只读 + 界面/设置类：这些不改条目数据，广播刷新只会引起"两边互相刷"的死循环（实测卡死）
+    static const char* kRead[] = { "state", "live.", "fsm.", "ids.", "update.", "ui.", "name.", "wem.names",
+                                   "theme.", "global.", "hotkeys.", "weapons.enabled.", "config.", "audio.",
+                                   "sound.preview", "bank.play", "bank.stopPlay", "bank.inspect", "overlay." };
     return false;
 }
 
