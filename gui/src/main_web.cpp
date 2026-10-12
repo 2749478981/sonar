@@ -54,6 +54,7 @@ ComPtr<ICoreWebView2Controller> g_ctrl;
 ComPtr<ICoreWebView2>           g_web;
 HWND                 g_hwnd = nullptr;
 ICoreWebView2Environment* g_env = nullptr;   // 浮窗要用同一个 Environment
+std::wstring            g_webRootW;                 // 映射根（exe 目录），浮窗控制器要自己设映射
 UINT_PTR             g_pollTimer = 0;
 bool                 g_ready = false;    // true = 网页已就绪可显示（前端发 ui.ready 后置位）
 int                  g_animPhase = 0;    // 启动加载画面的动画帧（图标呼吸/文字点点）
@@ -662,10 +663,39 @@ void CreateOverlayWindow() {
                 LayoutOverlay();
                 ICoreWebView2* wv = nullptr;
                 g_ovCtrl->get_CoreWebView2(&wv);
-                if (wv) {
-                    wv->Navigate(L"https://sonar.local/web/index.html#overlay");
-                    wv->Release();
+                if (!wv) { LogLine("overlay: get_CoreWebView2 failed"); return S_OK; }
+                // ★ 虚拟主机映射是"每个控制器"的：浮窗必须自己再设一次，
+                //   否则页面打不开（实测显示"找不到 sonar.local 的服务器 IP 地址"）。
+                {
+                    ComPtr<ICoreWebView2_3> wv3;
+                    if (SUCCEEDED(wv->QueryInterface(IID_PPV_ARGS(&wv3))) && wv3) {
+                        wv3->SetVirtualHostNameToFolderMapping(L"sonar.local", g_webRootW.c_str(),
+                                                              COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+                        wchar_t la2[MAX_PATH * 2] = {};
+                        if (::GetEnvironmentVariableW(L"LOCALAPPDATA", la2, MAX_PATH * 2) > 0) {
+                            const std::wstring assets = std::wstring(la2) + L"\\Sonar\\assets";
+                            wv3->SetVirtualHostNameToFolderMapping(L"sonar.assets", assets.c_str(),
+                                                                  COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+                        }
+                        LogLine("overlay: host mappings set (sonar.local + sonar.assets)");
+                    } else {
+                        LogLine("overlay: ICoreWebView2_3 unavailable, mappings NOT set");
+                    }
                 }
+                wv->Navigate(L"https://sonar.local/web/index.html#overlay");
+                // 记一条导航结果，便于排查浮窗白屏/打不开
+                {
+                    EventRegistrationToken tok{};
+                    wv->add_NavigationCompleted(
+                        Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                            [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* a) -> HRESULT {
+                                BOOL ok = FALSE;
+                                a->get_IsSuccess(&ok);
+                                LogLine("overlay: nav completed success=%d", (int)ok);
+                                return S_OK;
+                            }).Get(), &tok);
+                }
+                wv->Release();
                 LogLine("overlay: controller ok, navigating #overlay");
                 return S_OK;
             }).Get());
@@ -966,6 +996,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                             // ICoreWebView2_3 上，不是 ICoreWebView2 —— 要 QueryInterface。
                             ComPtr<ICoreWebView2_3> web3;
                             if (SUCCEEDED(g_web.As(&web3)) && web3) {
+                                g_webRootW = webRoot;   // 浮窗复用
                                 web3->SetVirtualHostNameToFolderMapping(
                                     L"sonar.local", webRoot.c_str(),
                                     COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
