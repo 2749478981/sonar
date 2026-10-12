@@ -36,10 +36,12 @@ const Capture = (() => {
 
   // ---- 过滤（显式、可清除）----
   function weaponFilterOn() {
+    if (document.documentElement.classList.contains('overlay-mode')) return false;   // 浮窗里不过滤：只看捕获记录，不受主界面武器筛选影响
     const a = API();
     return !!(a && a.ST && typeof a.ST.weaponFilter === 'number' && a.ST.weaponFilter >= 0);
   }
   function bankFilterOn() {
+    if (document.documentElement.classList.contains('overlay-mode')) return false;
     const cb = $('#bankOnlyThis');
     return !!(bank().path && cb && cb.checked);
   }
