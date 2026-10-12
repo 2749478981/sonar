@@ -6,8 +6,8 @@
 <title>Sonar 配置工具</title>
   <!-- 浮窗页面（#overlay）：必须在首屏渲染前同步打上标记，否则会先闪一下完整界面 -->
   <script>if (location.hash === '#overlay') document.documentElement.className = 'overlay-mode';</script>
-<link rel="stylesheet" href="css/base.css?v=2.38.3">
-<link rel="stylesheet" href="css/themes.css?v=2.38.3">
+<link rel="stylesheet" href="css/base.css?v=2.38.4">
+<link rel="stylesheet" href="css/themes.css?v=2.38.4">
 </head>
 <body>
 <!-- 主题装饰层（可爱风显示爪印，其它主题为空） -->
@@ -164,7 +164,14 @@
       <div class="phead">nbnk 制作</div>
       <div class="bankpage">
         <details class="bankhelp">
-          <summary>说明 / 转换环境 <span id="bankEnvBrief" class="dim"></span></summary>
+          <summary>
+            <span>说明 / 转换环境 <span id="bankEnvBrief" class="dim"></span></span>
+            <span class="bankhdr-right">
+              <span id="bankHistRow"></span>
+              <label class="inline" title="勾上后，捕获列表只显示当前导入的这个 bank 的记录"><input type="checkbox" id="bankOnlyThis" checked>
+                捕获只显示本 bank</label>
+            </span>
+          </summary>
           <p class="note">把游戏里的某个音效换成你自己的声音：<b>导入 nbnk</b> → 找到要换的那条 → <b>选音频</b>
             （wav / mp3 / ogg / flac）→ <b>转换并导出</b> → 把生成的 nbnk 放进
             <code>nativePC\sound\wwise\Windows\</code> 后生效（可直接用「导出到游戏目录」）。
@@ -172,7 +179,6 @@
           <p class="note ok"><b>生效提示（重要）</b>：武器音效的 nbnk 改完后，<b>一般只要在游戏里切换一次武器种类、再切回来</b>
             就会重新加载，<b>不需要重启游戏</b>；如果这样没生效，再考虑重启游戏。</p>
           <div class="note" id="bankEnv">转换环境：检查中…</div>
-      <div class="note" id="bankHistRow" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px"></div>
         </details>
 
         <div class="bankline">
@@ -181,8 +187,6 @@
           <button data-act="bank.pickOutDir">更改…</button>
           <button data-act="bank.outDirToGame" id="bankGameDirBtn" title="只是把上面的「输出目录」改成游戏读取 nbnk 的位置（不会立刻导出，导出要点「转换并导出」）">设为游戏目录</button>
           <button data-act="bank.openOut">打开目录</button>
-          <label class="inline" style="margin-left:auto"><input type="checkbox" id="bankOnlyThis" checked>
-            捕获只显示本 bank</label>
         </div>
         <div class="paths" id="bankInfo">还没有导入 nbnk。</div>
 
@@ -446,8 +450,8 @@
 
 <div class="toasts" id="toasts"></div>
 
-<script src="js/mock.js?v=2.38.3"></script>
-<script src="js/app.js?v=2.38.3"></script>
-<script src="js/capture.js?v=2.38.3"></script>
+<script src="js/mock.js?v=2.38.4"></script>
+<script src="js/app.js?v=2.38.4"></script>
+<script src="js/capture.js?v=2.38.4"></script>
 </body>
 </html>

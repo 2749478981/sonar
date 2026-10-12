@@ -774,3 +774,9 @@ html.overlay-mode .ovbar .ovx:hover{background:rgba(255,255,255,.25)}
 /* 状态栏里的"插件 DLL 未更新"警告（常驻，直到用户关游戏更新） */
 .dllwarn{margin-right:10px; padding:1px 8px; border-radius:9px; font-size:11.5px; font-weight:700;
   background:var(--c-amber, #ff9f0a); color:#3d2600; cursor:help; flex:none}
+/* nbnk 说明行：标题在左、「恢复上次替换」+「捕获只显示本 bank」在右 */
+.bankhelp > summary{display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap}
+.bankhdr-right{display:flex; align-items:center; gap:10px; margin-left:auto}
+.bankhdr-right #bankHistRow{display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap}
+.bankhdr-right label.inline{font-size:12px; white-space:nowrap}
+.bankhdr-right .note{margin:0}
