@@ -91,6 +91,8 @@
         <label class="inline" title="只列出当前激活组合的条目；关掉则列出全部，非激活的会打标记">
           <input type="checkbox" id="onlyActive"> 只看激活组合</label>
         <button class="primary" data-act="entry.add">＋ 新增条目</button>
+        <button data-act="entry.lint" title="检查当前武器条目里容易踩的坑：重复触发条件、没有音效、音效文件不存在、匹配任意动作">检查配置</button>
+        <button data-act="entry.merge" title="把触发条件完全相同的条目合并成一条（音效池取并集），整理重复/多余的配置">合并同条件</button>
       </div>
       <div class="viewswitch list">
         <button id="viewListFsm" class="vs on">派生条目（FSM/LMT）</button>

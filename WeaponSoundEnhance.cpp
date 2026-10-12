@@ -747,9 +747,39 @@ private:
         wfx.nAvgBytesPerSec = ctx.rate * wfx.nBlockAlign;
 
         HWAVEOUT hwo = nullptr;
-        if (waveOutOpen(&hwo, WAVE_MAPPER, &wfx, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR)
+        // ★ 插拔音频设备（耳机/USB 声卡）后设备会短暂不可用：重试几次再放弃，
+        //   否则用户看到的就是"有时候完全没声音"（且没有任何提示）。
+        MMRESULT mo = MMSYSERR_NOERROR;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            mo = waveOutOpen(&hwo, WAVE_MAPPER, &wfx, 0, 0, CALLBACK_NULL);
+            if (mo == MMSYSERR_NOERROR) break;
+            ::Sleep(120);
+        }
+        if (mo != MMSYSERR_NOERROR || !hwo) {
+            plugin::LogD("[audio] waveOutOpen 失败(0x%08X)：设备可能刚被插拔；改用 PlaySound 兜底", (unsigned)mo);
+            // 兜底：合成一个内存 WAV 交给 PlaySound（它自己处理设备变化，成功率更高）
+            std::vector<std::uint8_t> wav;
+            wav.reserve(44 + ctx.samples.size() * 2);
+            const std::uint32_t dataLen = (std::uint32_t)(ctx.samples.size() * 2);
+            const std::uint32_t riffLen = 36 + dataLen;
+            const std::uint16_t blockAlign = (std::uint16_t)((ctx.bits / 8) * ctx.channels);
+            const std::uint32_t byteRate = ctx.rate * blockAlign;
+            auto put32 = [&wav](std::uint32_t v) { for (int k = 0; k < 4; ++k) wav.push_back((std::uint8_t)(v >> (8 * k))); };
+            auto put16 = [&wav](std::uint16_t v) { for (int k = 0; k < 2; ++k) wav.push_back((std::uint8_t)(v >> (8 * k))); };
+            wav.push_back('R'); wav.push_back('I'); wav.push_back('F'); wav.push_back('F');
+            put32(riffLen);
+            wav.push_back('W'); wav.push_back('A'); wav.push_back('V'); wav.push_back('E');
+            wav.push_back('f'); wav.push_back('m'); wav.push_back('t'); wav.push_back(' ');
+            put32(16); put16(1); put16(ctx.channels); put32(ctx.rate); put32(byteRate);
+            put16(blockAlign); put16(ctx.bits);
+            wav.push_back('d'); wav.push_back('a'); wav.push_back('t'); wav.push_back('a');
+            put32(dataLen);
+            const std::uint8_t* src = reinterpret_cast<const std::uint8_t*>(ctx.samples.data());
+            wav.insert(wav.end(), src, src + dataLen);
+            ::PlaySoundW(nullptr, nullptr, 0);
+            ::PlaySoundW(reinterpret_cast<LPCWSTR>(wav.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
             return;
-
+        }
         std::vector<std::uint8_t> bytes(ctx.samples.size() * 2);
         std::memcpy(bytes.data(), ctx.samples.data(), bytes.size());
 
@@ -1173,6 +1203,8 @@ struct Attack
     Pool gaugePool[4];            // LS gauge pools, keyed by level 0..3
     bool stop = false;            // Stop=1：命中这条时停止正在播放的音效（无音效条目）
     bool inMatch = false;         // edge latch: fire once per action (ungrouped entries)
+    std::uint64_t lastTriggerMs = 0;  // 每条目独立防抖：以前是全局 gLastTrigger，
+                                       // 导致"同一条件写多条只有第一条响"、"紧跟上一招的动作被吃掉"
 
     // ---- 延迟判定（CheckTimeoutMs > 0 时启用）----
     // 动作匹配上只是"开窗"，接着盯一段时间，按条件表达式挑音效池。
@@ -1395,9 +1427,10 @@ void PollWemEvents(std::mt19937& rng)
                 LogD("[wem] stop %s (media=%lld)", e.name.c_str(), (long long)h.media);
                 break;
             }
-            if (now - gLastTrigger < (std::uint64_t)gDebounceMs) break;
+            if (now - e.lastTriggerMs < (std::uint64_t)gDebounceMs) break;   // 每条目独立防抖
             const std::string tag = "a[" + e.name + "] media=" + std::to_string((long long)h.media);
             if (FireEntry(e, player::gGauge, rng, now, tag)) {
+                e.lastTriggerMs = now;
                 gWemLastId = h.media;
                 gWemLastPlayMs = now;
                 LogD("[wem] fired %s (bank wp? weapon=%d)", e.name.c_str(), h.weapon);
@@ -1428,7 +1461,7 @@ const int kSoundCooldownMs = 400;
 // logical attack; the group fires at most once per action occurrence, with the
 // gauge level frozen at the first trigger instant (mid-action level-ups like
 // the LS spirit finisher no longer fire the attack twice).
-struct GroupRt { std::uint64_t lastSeen = 0; bool fired = false; };
+struct GroupRt { std::uint64_t lastSeen = 0; bool fired = false; std::uint64_t lastTriggerMs = 0; };
 std::vector<std::pair<std::string, GroupRt>> g_groups;
 const std::uint64_t kGroupResetMs = 450;   // quiet time before the group re-arms
 
@@ -2841,9 +2874,10 @@ void WemEventSink(uint32_t media_id, uint32_t event_id, uint32_t playing_id,
             LogD("[wem] stop %s (media=%u)", e.name.c_str(), media_id);
             break;
         }
-        if (now - gLastTrigger < (std::uint64_t)gDebounceMs) break;
+        if (now - e.lastTriggerMs < (std::uint64_t)gDebounceMs) break;   // 每条目独立防抖
         const std::string tag = "a[" + e.name + "] media=" + std::to_string(media_id);
         if (FireEntry(e, player::gGauge, s_rng, now, tag)) {
+            e.lastTriggerMs = now;
             gWemLastId = (long long)media_id;
             gWemLastPlayMs = now;
             ed.fired = true;
@@ -3205,20 +3239,20 @@ DWORD WINAPI WorkerProc(LPVOID)
                     if (match) st.lastSeen = nowMs;
                     if (!match || st.fired) continue;
                     st.fired = true;
-                    if (nowMs - gLastTrigger < (std::uint64_t)gDebounceMs)
+                    if (nowMs - st.lastTriggerMs < (std::uint64_t)gDebounceMs)
                         continue;
                     if (FireEntry(e, gauge, rng, nowMs, tag))
-                        gLastTrigger = nowMs;
+                        st.lastTriggerMs = nowMs;
                     continue;
                 }
 
                 // Ungrouped entry: legacy per-entry edge-latch behaviour.
                 if (match && !e.inMatch) {
                     e.inMatch = true;
-                    if (nowMs - gLastTrigger < (std::uint64_t)gDebounceMs)
+                    if (nowMs - e.lastTriggerMs < (std::uint64_t)gDebounceMs)
                         continue;
                     if (FireEntry(e, gauge, rng, nowMs, tag))
-                        gLastTrigger = nowMs;
+                        e.lastTriggerMs = nowMs;
                 } else if (!match) {
                     e.inMatch = false;
                 }

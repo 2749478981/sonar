@@ -662,3 +662,19 @@ button.reload:active{transform:scale(.98)}
 }
 /* 哈气冷却期间不接受点击，鼠标给一个禁止提示 */
 .logo-badge.hiss{cursor:not-allowed}
+
+/* ===========================================================================
+   同触发条件分组（条目表）：组标题行 + 组内行左侧色条
+   =========================================================================== */
+tr.grp td{
+  background:var(--panel-2);
+  border-top:calc(var(--bw) + .5px) solid var(--c-blue, #3b82f6);
+  border-bottom:var(--bw) solid var(--chip-border);
+  padding:5px 10px;
+}
+tr.grp .grptag{
+  display:inline-block; margin-right:8px; padding:1px 8px; border-radius:9px;
+  background:var(--c-blue, #3b82f6); color:#fff; font-size:11.5px; font-weight:700;
+}
+tr.grp .dim{font-size:11.5px}
+tr.grpmem td:first-child{box-shadow:inset 3px 0 0 var(--c-blue, #3b82f6)}

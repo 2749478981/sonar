@@ -109,6 +109,7 @@ const Capture = (() => {
       el('b', { text: r.time || '' }),
       el('span', { class: 'n', text: r.name || ('fsm ' + r.fsm) }),
       el('span', { class: 'ids', text: `w${r.weapon} ${r.fsm}/${r.lmt}` }),
+      el('span', { class: 'badge' + ((r.matches || 0) > 1 ? ' warn' : ''), title: '该触发条件下共有几条条目', text: (r.matches || 0) > 1 ? ('×' + r.matches + ' 条条目') : '1 条条目' }),
       el('span', { class: 'capacts' },
         r.added ? btn('编辑', () => a.captureToEntry(r), '该动作已配了条目 → 编辑')
                 : btn('＋ 添加', () => a.captureToEntry(r), '把这个动作加入条目', 'primary')));

@@ -551,12 +551,34 @@ function renderTable() {
       : '还没有任何条目 — 点右上角「＋ 新增条目」开始';
   } else empty.hidden = true;
 
-  view.forEach(({ e, i }) => {
+  // ★ 按"触发条件"分组：同一条件（武器+FSM+目标层+LMT）写了好几条时，
+  //   用一个分组标题行把它们圈起来，并给组内行加底色 —— 用户一眼能看出"这几条是同一个条件"，
+  //   避免重复/多余配置（实测用户会把同一条件写好几条，然后以为"有的条目不生效"）。
+  const condKey = e => [e.weaponType, e.fsmId, e.fsmTarget,
+                         (e.lmtAny || !(e.lmt || []).length) ? 'any' : (e.lmt || []).join(',')].join('|');
+  const groups = [];
+  const groupOf = {};
+  view.forEach(item => {
+    const k = condKey(item.e);
+    if (!groupOf[k]) { groupOf[k] = { key: k, items: [] }; groups.push(groupOf[k]); }
+    groupOf[k].items.push(item);
+  });
+  groups.forEach(g => {
+    if (g.items.length > 1) {
+      tb.appendChild(h('tr', { class: 'grp' },
+        h('td', { colspan: '6' },
+          h('span', { class: 'grptag', text: `同一触发条件 · ${g.items.length} 条` }),
+          h('span', { class: 'dim', text: '（同一动作会同时播放这几条；想合并成一条可点工具栏「合并同条件」）' }))));
+    }
+    g.items.forEach(item => { renderEntryRow(tb, item, g.items.length > 1); });
+  });
+  function renderEntryRow(tb, item, inGroup) {
+  const { e, i } = item;
     const sm = soundSummary(e);
     const inCombo = entryActive(e);
     const isWem = wem;
     const tr = h('tr', {
-      class: (i === ST.selIndex ? 'sel ' : '') + (inCombo ? '' : 'inactive'),
+      class: (i === ST.selIndex ? 'sel ' : '') + (inCombo ? '' : 'inactive') + (inGroup ? ' grpmem' : ''),
       title: inCombo ? '' : '这条属于别的组合，当前不生效（切换组合后才会生效）',
     },
       h('td', {}, h('span', { class: 'nm', title: displayName(e), text: displayName(e) }),
@@ -591,7 +613,7 @@ function renderTable() {
       openEditor(i);
     });
     tb.appendChild(tr);
-  });
+  }
 
   // 表头排序指示
   $$('#entryTable th.sortable').forEach(th => {
@@ -1564,6 +1586,27 @@ const ACTIONS = {
     toast(r.running ? '怪物猎人已在运行，已切到游戏窗口' : '已启动怪物猎人', 'ok');
   },
   'sound.openDir': async () => { await Backend.call('sound.openSoundsDir', {}); },
+  'entry.lint':  async () => {
+    const r = await Backend.call('entries.lint', { weapon: ST.weaponFilter });
+    // confirmBox 用 innerHTML：必须 <br> 换行，否则多条问题会挤成一行
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const lines = (r.issues || []).map(s => '• ' + esc(s)).join('<br>');
+    await confirmBox({ title: '配置检查', message: lines || '没有发现问题', okText: '知道了' });
+  },
+  'entry.merge': async () => {
+    const w = ST.weaponFilter;
+    if (w < 0) { toast('先在左栏选一把武器，再合并该武器当前组合里的重复条目', 'err'); return; }
+    const go = await confirmBox({
+      title: '合并同条件条目', danger: false, okText: '合并',
+      message: '会把「触发条件完全相同」的条目合并成一条：音效池取并集、重复的音效只保留一份，其余条目删除。\n'
+             + '只处理当前武器的当前组合；合并后记得点保存。',
+    });
+    if (!go) return;
+    const r = await Backend.call('entries.mergeSame', { weapon: w });
+    await refresh();
+    toast(r.merged ? `已合并 ${r.merged} 条同条件条目（剩余 ${r.left} 条）` : (r.status || '没有可合并的条目'),
+          r.merged ? 'ok' : 'err');
+  },
   'entry.add':  async () => { ST.selIndex = -1; renderTable(); await openEditor(null); },
 
   'combo.create': async () => {

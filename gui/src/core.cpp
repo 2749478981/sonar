@@ -2347,6 +2347,7 @@ struct Core::Impl {
             h.set("ageMs", JVal((long long)(::GetTickCount64() - e.ms)));
             h.set("name", JVal(ResolveName(e.weapon, e.fsm, e.lmt)));
             h.set("added", JVal(IsCapturedAdded(e.weapon, e.fsm, e.lmt)));
+            h.set("matches", JVal(CapturedMatchCount(e.weapon, e.fsm, e.lmt)));   // 同一触发条件有几条条目
             a.push(h);
         }
         return a;
@@ -2588,6 +2589,20 @@ struct Core::Impl {
         return false;
     }
 
+    // 该动作（武器+FSM+LMT）当前命中几条条目 —— 捕获历史里用来区分"同一触发条件写了好几条"
+    int CapturedMatchCount(int weapon, int fsm, int lmt) const {
+        int n = 0;
+        for (std::size_t i = 0; i < cfg.entries.size(); ++i) {
+            const SoundEntry& e = cfg.entries[i];
+            if (!EntryActive(e)) continue;
+            if (e.fsmId != fsm) continue;
+            if (e.weaponType >= 0 && e.weaponType != weapon) continue;
+            if (!e.MatchesLmt(lmt)) continue;
+            ++n;
+        }
+        return n;
+    }
+
     JVal LiveJson() const {
         JVal d = JVal::obj();
         const bool att = live.attached && liveOk;
@@ -2604,6 +2619,7 @@ struct Core::Impl {
                                ? ResolveName(live.weapon, live.fsm, live.lmt)
                                : std::string()));
         d.set("added", JVal(live.inScene && IsCapturedAdded(live.weapon, live.fsm, live.lmt)));
+        d.set("matches", JVal(live.inScene ? CapturedMatchCount(live.weapon, live.fsm, live.lmt) : 0));
         d.set("wemMedia", JVal(curWemMedia));      // 最近一次 wem 播放（无则 -1）
         d.set("wemName", JVal(curWemName.empty() ? std::string() : curWemName));
         d.set("wemDispName", JVal(curWemMedia > 0 ? WemDispName((int)curWemMedia, curWemName, curWemBank) : std::string()));
