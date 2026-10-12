@@ -631,6 +631,16 @@ void CreateOverlayWindow() {
         g_ovRect.top    = wa.top + 24;
         g_ovRect.bottom = g_ovRect.top + 560;
     }
+    {   // 兜底：保存的位置在当前显示器之外（换显示器/分辨率变了）→ 拉回工作区右上角
+        RECT wa{}; ::SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+        const long w = g_ovRect.right - g_ovRect.left, h = g_ovRect.bottom - g_ovRect.top;
+        if (g_ovRect.left < wa.left - 40 || g_ovRect.top < wa.top - 40 ||
+            g_ovRect.left > wa.right - 80 || g_ovRect.top > wa.bottom - 40) {
+            g_ovRect.right = wa.right - 24; g_ovRect.left = g_ovRect.right - w;
+            g_ovRect.top = wa.top + 24; g_ovRect.bottom = g_ovRect.top + h;
+            LogLine("overlay: saved rect off-screen, moved back to %ld,%ld", g_ovRect.left, g_ovRect.top);
+        }
+    }
     g_ovHwnd = ::CreateWindowExW(
         g_ovTopmost ? WS_EX_TOPMOST : 0, L"SonarOverlayWnd", L"Sonar 捕获记录",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_SIZEBOX,

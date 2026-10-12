@@ -3178,54 +3178,32 @@ bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::s
                 std::map<std::wstring, std::string>::iterator it = srcToRel.find(key);
                 if (it != srcToRel.end()) { sp.path = it->second; continue; }
 
-                std::wstring outSub;   // outDir 之下的相对路径（含文件名）
                 std::string newRel;
-                if (sp.path.rfind("sounds/", 0) == 0 || sp.path.rfind("sounds\\", 0) == 0) {
-                    // 配置里本来就是 sounds/…（可能带子文件夹）→ 保留子目录结构
-                    std::string sub = sp.path.substr(7);
-                    outSub = Utf8ToWide(sub);
-                    for (std::size_t k = 0; k < outSub.size(); ++k)
-                        if (outSub[k] == L'/') outSub[k] = L'\\';
-                    const std::size_t lastBack = outSub.find_last_of(L'\\');
-                    const std::wstring base =
-                        outSub.substr(lastBack == std::wstring::npos ? 0 : lastBack + 1);
-                    std::wstring baseKey = base;
-                    for (std::size_t k = 0; k < baseKey.size(); ++k)
-                        if (baseKey[k] >= L'A' && baseKey[k] <= L'Z') baseKey[k] = (wchar_t)(baseKey[k] + 32);
-                    const int k2 = usedBase[baseKey];
-                    if (k2 > 0) {                                  // 撞名：xxx_2.wav
-                        const std::size_t dot = base.find_last_of(L'.');
-                        const std::wstring n2 =
-                            (dot == std::wstring::npos)
-                                ? (base + L"_" + std::to_wstring(k2 + 1))
-                                : (base.substr(0, dot) + L"_" + std::to_wstring(k2 + 1) + base.substr(dot));
-                        outSub = (lastBack == std::wstring::npos)
-                                     ? n2
-                                     : (outSub.substr(0, lastBack + 1) + n2);
-                    }
-                    usedBase[baseKey] = k2 + 1;
-                    newRel = "sounds/" + Utf8FromWide(outSub);
-                    for (std::size_t k = 0; k < newRel.size(); ++k)
-                        if (newRel[k] == '\\') newRel[k] = '/';
-                } else {
-                    // 绝对路径 → 压平到 sounds\ 根（带冲突改名）
-                    std::wstring base = src.substr(src.find_last_of(L"\\/") + 1);
-                    std::wstring baseKey = base;
-                    for (std::size_t k = 0; k < baseKey.size(); ++k)
-                        if (baseKey[k] >= L'A' && baseKey[k] <= L'Z') baseKey[k] = (wchar_t)(baseKey[k] + 32);
-                    const int k2 = usedBase[baseKey];
-                    std::wstring outName = base;
-                    if (k2 > 0) {
-                        const std::size_t dot = outName.find_last_of(L'.');
-                        outName = (dot == std::wstring::npos)
-                                      ? (outName + L"_" + std::to_wstring(k2 + 1))
-                                      : (outName.substr(0, dot) + L"_" + std::to_wstring(k2 + 1) +
-                                         outName.substr(dot));
-                    }
-                    usedBase[baseKey] = k2 + 1;
-                    outSub = outName;
-                    newRel = "sounds/" + Utf8FromWide(outName);
+                // ★ 统一归类：sounds\<组合名>\<文件名>（用户明确要求；导入端也是按组合归类）
+                //   以前是"保留原子目录 / 压平到 sounds 根"，同一个包里目录结构不统一。
+                std::wstring base = src.substr(src.find_last_of(L"\\/") + 1);
+                if (base.empty()) { ++missing; continue; }
+                std::wstring baseKey = base;
+                for (std::size_t k = 0; k < baseKey.size(); ++k)
+                    if (baseKey[k] >= L'A' && baseKey[k] <= L'Z') baseKey[k] = (wchar_t)(baseKey[k] + 32);
+                const int k2 = usedBase[baseKey];
+                if (k2 > 0) {                                  // 撞名：xxx_2.wav
+                    const std::size_t dot = base.find_last_of(L'.');
+                    base = (dot == std::wstring::npos)
+                               ? (base + L"_" + std::to_wstring(k2 + 1))
+                               : (base.substr(0, dot) + L"_" + std::to_wstring(k2 + 1) + base.substr(dot));
                 }
+                usedBase[baseKey] = k2 + 1;
+                std::wstring comboDir = Utf8ToWide(combo.empty() ? std::string("默认") : combo);
+                for (std::size_t k = 0; k < comboDir.size(); ++k) {
+                    const wchar_t c = comboDir[k];
+                    if (c == L'\\' || c == L'/' || c == L':' || c == L'*' || c == L'?' ||
+                        c == L'"' || c == L'<' || c == L'>' || c == L'|') comboDir[k] = L'_';
+                }
+                std::wstring outSub = comboDir + L"\\" + base;
+                newRel = "sounds/" + Utf8FromWide(comboDir) + "/" + Utf8FromWide(base);
+                for (std::size_t k = 0; k < newRel.size(); ++k)
+                    if (newRel[k] == '\\') newRel[k] = '/';
 
                 const std::size_t dd = outSub.find_last_of(L'\\');
                 if (dd != std::wstring::npos) MakeDirs(outDir + outSub.substr(0, dd + 1));
