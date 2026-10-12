@@ -1657,7 +1657,15 @@ const ACTIONS = {
     const r = await Backend.call('combo.import', {});
     if (r.cancelled) return;
     await refresh();
-    toast(`已导入 ${r.added} 条条目、${r.copied} 个音效`, 'ok');
+    // ★ 用 core 真实返回的字段（soundCopied / soundMissing）：原来写的是 r.copied，
+    //   该字段不存在 → 提示会显示"undefined 个音效"，用户看到还以为导入坏了。
+    const sc = r.soundCopied || 0, sm = r.soundMissing || 0;
+    if (sm > 0) {
+      toast(`已导入 ${r.added} 条条目、${sc} 个音效；${sm} 个音效在包里没有（路径保持原样）。`
+            + `\n这个组合包不含这些音效，需要自己把文件放到 sounds\\ 下。`, 'err');
+    } else {
+      toast(`已导入 ${r.added} 条条目、${sc} 个音效`, 'ok');
+    }
   },
 
   'win.fsm':    async () => { openModal('#mFsm'); await runFsmSearch(); },
