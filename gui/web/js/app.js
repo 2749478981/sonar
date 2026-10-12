@@ -1944,13 +1944,15 @@ function bankRepsToArr() {
   return Object.keys(BANK.reps).map(k => ({ media: parseInt(k, 10), wem: BANK.reps[k] }))
                                         .filter(x => x.media > 0 && x.wem);
 }
-// 说明行里的按钮/复选框不能触发 <details> 折叠（点它们时阻止冒泡）
+// ★ 说明行右侧的按钮/复选框：点它们时不要折叠 <details>。
+//   注意不能在上层用 stopPropagation —— 捕获阶段 stop 会让按钮自己的 onclick 收不到事件（实测"点了没反应"）。
+//   正确做法：在 summary 上 preventDefault，只取消默认的展开/收起。
 document.addEventListener('click', e => {
   const t = e.target;
-  if (!t) return;
-  if (t.closest && t.closest('#bankHistRow')) e.stopPropagation();
-  if (t.closest && t.closest('.bankhdr-right label')) e.stopPropagation();
-}, true);   // 捕获阶段：比 details 的默认行为更早
+  if (!t || !t.closest) return;
+  const inHdr = t.closest('#bankHistRow') || t.closest('.bankhdr-right label');
+  if (inHdr) { const sm = t.closest('summary'); if (sm) e.preventDefault(); }
+});
 
 async function bankShowHistory() {
   const row = document.querySelector('#bankHistRow');
@@ -1975,6 +1977,7 @@ async function bankShowHistory() {
       BANK.histSaved = true;
       renderBank();
       toast(`已恢复 ${n} 个替换（文件不在的会转换时报错，可重新选音频）`, 'ok');
+          const _st = document.getElementById('statusText'); if (_st) _st.textContent = '已恢复上次替换：' + n + ' 个 wem';
     };
     row.appendChild(sp);
     row.appendChild(btn);
