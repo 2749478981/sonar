@@ -313,6 +313,7 @@ bool OverlayVisible();
 void OverlaySetTopmost(bool on);
 void LoadOverlayPrefs();
 void PostJsonToOverlay(const std::string& json);
+bool IsReadOnlyMethod(const std::string& m);   // 只读方法不广播刷新（否则 refresh 自己触发自己 → 死循环）
 extern bool g_ovTopmost;   // 定义在浮窗段（下面）
 
 void OnMessage(const std::string& text) {
@@ -350,6 +351,12 @@ void OnMessage(const std::string& text) {
         result = "{\"ok\":false,\"error\":\"unknown exception in core\"}";
     }
     Reply(env.id, result);
+    // ★ 一端改了数据 → 通知另一端刷新（浮窗里「＋ 添加」后主界面要同步，反之亦然）
+    if (env.method.rfind("overlay.", 0) != 0 && !IsReadOnlyMethod(env.method)) {
+        const std::string ev = "{\"event\":\"refresh\"}";
+        if (g_curSender && g_curSender != g_web.Get()) PostJson(ev);   // 浮窗发的 → 通知主窗口
+        else PostJsonToOverlay(ev);                              // 主窗口发的 → 通知浮窗
+    }
       // 诊断：后端失败时留日志（排查"操作失败"类提示用）
       if (result.find("\"ok\":false") != std::string::npos)
           LogLine("backend err: %s | %s", env.method.c_str(), result.c_str());
@@ -744,6 +751,13 @@ void ShowOverlay(bool on) {
 }
 
 // 把同一个事件也发给浮窗（它只显示捕获面板，需要实时数据）
+// 纯读取的方法：调用它们不会改配置，广播刷新会造成 refresh ↔ refresh 死循环
+bool IsReadOnlyMethod(const std::string& m) {
+    static const char* kRead[] = { "state", "live.", "fsm.", "ids.", "update.", "ui.", "name.", "wem.names" };
+    for (const char* p : kRead) if (m.rfind(p, 0) == 0) return true;
+    return false;
+}
+
 void PostJsonToOverlay(const std::string& json) {
     if (!g_ovCtrl || !OverlayVisible()) return;
     ICoreWebView2* wv = nullptr;

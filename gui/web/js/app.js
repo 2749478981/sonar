@@ -2238,6 +2238,8 @@ function uiReady() {
 }
 
 Backend.onEvent(ev => {
+    // ★ 另一端（浮窗/主界面）改了数据 → 同步刷新，避免两边不一致
+    if (ev.event === 'refresh') { refresh(); return; }   // 另一端改了数据 → 同步（不 await，避免死循环）
   if (ev.event === 'live') {
     ST.live = Object.assign(ST.live, ev.data || {});
     renderLive();
