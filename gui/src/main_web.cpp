@@ -345,6 +345,11 @@ void OnMessage(const std::string& text) {
                  ",\"topmost\":" + (g_ovTopmost ? "true" : "false") + "}}";
         PostJson(std::string("{\"event\":\"overlay\",\"data\":{\"visible\":") +
                  (OverlayVisible() ? "true" : "false") + "}}");
+    } else if (env.method == "theme.set") {
+        // 换主题：把主题直接转给另一个窗口（不是 refresh，所以不会循环）
+        result = g_core.Handle(env.method, env.params);
+        const std::string ev = std::string("{\"event\":\"theme\",\"data\":") + (env.params.empty() ? "{}" : env.params) + "}";
+        if (g_curSender && g_curSender != g_web.Get()) PostJson(ev); else PostJsonToOverlay(ev);
     } else result = g_core.Handle(env.method, env.params);   // ★ 必须是 else：否则会覆盖上面 overlay 的结果
     } catch (const std::exception& ex) {
         result = std::string("{\"ok\":false,\"error\":\"") + ex.what() + "\"}";
@@ -616,6 +621,12 @@ void LayoutOverlay() {
 }
 
 LRESULT CALLBACK OvWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    // ★ WS_EX_NOACTIVATE 下系统不会执行标题栏拖动 → 自己进移动循环
+    if (msg == WM_NCLBUTTONDOWN && wp == HTCAPTION) {
+        ::ReleaseCapture();
+        ::SendMessageW(hwnd, WM_SYSCOMMAND, SC_MOVE | 0x0002, 0);   // 0x0002 = 用鼠标移动
+        return 0;
+    }
     if (msg == WM_NCHITTEST) {
         // 无边框窗口：自己判定"拖标题栏 / 拉边框缩放"
         POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
