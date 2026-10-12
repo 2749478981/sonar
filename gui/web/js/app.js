@@ -1580,7 +1580,7 @@ const ACTIONS = {
   'game.reload': async () => { await Backend.call('game.reload', {});
     toast('已请求游戏重载配置（改完要先保存）', 'ok'); },
   'game.stop':   async () => { await Backend.call('game.stop', {});
-    toast('已请求停止游戏内正在播放的音效', 'ok'); },
+      toast('已停止：游戏内音效 + GUI 试听', 'ok'); },
   'game.launch': async () => {
     const r = await Backend.call('game.launch', {});
     toast(r.running ? '怪物猎人已在运行，已切到游戏窗口' : '已启动怪物猎人', 'ok');

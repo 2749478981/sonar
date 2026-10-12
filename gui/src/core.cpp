@@ -781,6 +781,16 @@ std::string ZipExtractTo(const std::wstring& zipPath, const std::string& extDir)
 //  waveOut 又是阻塞式的（要等 WHDR_DONE），更不能占着 UI 线程。
 //  这里和旧版一样用裸 CreateThread（不引 std::thread 的 join 语义，播完自己退出）。
 // ---------------------------------------------------------------------------
+// GUI 内试听的停止：与插件侧同款机制 —— 停止时把代次 +1，正在播的声部发现代次不符
+// 就 waveOutReset 立刻打断；同时把 SND_ASYNC 的 PlaySound（wem/资源试听）也停掉。
+// （以前试听是 while(WHDR_DONE) Sleep(10) 死等，界面上的"停止音效"根本停不掉它。）
+std::atomic<unsigned long long> gPvStopEpoch{ 0 };
+
+void StopAllPreview() {
+    gPvStopEpoch.fetch_add(1, std::memory_order_relaxed);
+    ::PlaySoundW(nullptr, nullptr, 0);
+}
+
 struct PvCtx {
     std::wstring path;
     float gain = 1.0f;
@@ -789,7 +799,11 @@ struct PvCtx {
 
 DWORD WINAPI PvWorker(LPVOID param) {
     std::unique_ptr<PvCtx> ctx((PvCtx*)param);
-    if (ctx->delayMs > 0) ::Sleep(ctx->delayMs);
+    const unsigned long long myEpoch = gPvStopEpoch.load(std::memory_order_relaxed);
+    for (unsigned waited = 0; waited < ctx->delayMs; waited += 10) {   // 延迟期间也要能被停止
+        if (gPvStopEpoch.load(std::memory_order_relaxed) != myEpoch) return 0;
+        ::Sleep(10);
+    }
 
     HANDLE h = ::CreateFileW(ctx->path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -836,7 +850,14 @@ DWORD WINAPI PvWorker(LPVOID param) {
         return 0;
     }
     ::waveOutWrite(hwo, &hdr, sizeof(hdr));
-    while ((hdr.dwFlags & WHDR_DONE) == 0) ::Sleep(10);
+    while ((hdr.dwFlags & WHDR_DONE) == 0) {
+        ::Sleep(10);
+        if (gPvStopEpoch.load(std::memory_order_relaxed) != myEpoch) {
+            ::waveOutReset(hwo);                                       // 立刻打断当前缓冲
+            while ((hdr.dwFlags & WHDR_DONE) == 0) ::Sleep(5);
+            break;
+        }
+    }
     ::waveOutUnprepareHeader(hwo, &hdr, sizeof(hdr));
     ::waveOutClose(hwo);
     return 0;
@@ -4371,7 +4392,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
 
         if (method == "game.stop") {
             FsWrite(im->BaseDir() + "_wse_stop.flag", "1");
-            im->SetStatus("已请求停止游戏内正在播放的音效（等价 /wse stop）");
+            StopAllPreview();   // ★ GUI 内试听也一起停（以前只停游戏内的，试听照旧在响）
+            im->SetStatus("已停止游戏内音效与 GUI 试听（等价 /wse stop）");
             JVal d = JVal::obj();
             d.set("flag", JVal(ToSlash(im->BaseDir() + "_wse_stop.flag")));
             d.set("status", JVal(im->status));
