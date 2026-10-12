@@ -53,6 +53,7 @@ ULONG_PTR            g_gdiToken = 0;   // GDI+ 启动令牌（启动加载画面
 ComPtr<ICoreWebView2Controller> g_ctrl;
 ComPtr<ICoreWebView2>           g_web;
 HWND                 g_hwnd = nullptr;
+ICoreWebView2*          g_curSender = nullptr;    // 当前请求的发送方（浮窗也会发请求，回复必须回给它）
 ICoreWebView2Environment* g_env = nullptr;   // 浮窗要用同一个 Environment
 std::wstring            g_webRootW;                 // 映射根（exe 目录），浮窗控制器要自己设映射
 UINT_PTR             g_pollTimer = 0;
@@ -301,7 +302,9 @@ void PaintLoading(HWND hwnd) {
 void Reply(long long id, const std::string& result) {
     std::string body = result;
     if (body.empty() || body[0] != '{') body = "{\"ok\":false,\"error\":\"core returned non-object\"}";
-    PostJson("{\"id\":" + std::to_string(id) + "," + body.substr(1));
+    const std::string msg = std::string("{\"id\":") + std::to_string(id) + "," + body.substr(1);
+    if (g_curSender) g_curSender->PostWebMessageAsString(Utf8ToWide(msg).c_str());
+    else PostJson(msg);   // 浮窗发的请求，回复回给浮窗（否则前端"后端无响应"超时）
 }
 
 // 浮窗（定义在文件后半段）
@@ -681,6 +684,19 @@ void CreateOverlayWindow() {
                         LogLine("overlay: ICoreWebView2_3 unavailable, mappings NOT set");
                     }
                 }
+                // 浮窗也要能调后端（捕获面板里的「浮窗」按钮就在浮窗页面上）
+                wv->add_WebMessageReceived(
+                    Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                        [](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                            LPWSTR raw = nullptr;
+                            if (SUCCEEDED(args->TryGetWebMessageAsString(&raw)) && raw) {
+                                g_curSender = sender;
+                                OnMessage(WideToUtf8(raw));
+                                g_curSender = nullptr;
+                                ::CoTaskMemFree(raw);
+                            }
+                            return S_OK;
+                        }).Get(), nullptr);
                 wv->Navigate(L"https://sonar.local/web/index.html#overlay");
                 // 记一条导航结果，便于排查浮窗白屏/打不开
                 {
@@ -1041,10 +1057,9 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                             // JS → C++
                             g_web->add_WebMessageReceived(
                                 Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                                    [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                                    [](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
                                         LPWSTR raw = nullptr;
-                                        // 前端发的是字符串（自己 JSON.stringify 过），
-                                        // 所以用 TryGetWebMessageAsString；拿不到再退回 AsJson
+                                        g_curSender = sender;   // 回复要回给发送方
                                         if (SUCCEEDED(args->TryGetWebMessageAsString(&raw)) && raw) {
                                             OnMessage(WideToUtf8(raw));
                                             ::CoTaskMemFree(raw);
@@ -1052,6 +1067,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                                             OnMessage(WideToUtf8(raw));
                                             ::CoTaskMemFree(raw);
                                         }
+                                        g_curSender = nullptr;
                                         return S_OK;
                                     }).Get(),
                                 nullptr);
