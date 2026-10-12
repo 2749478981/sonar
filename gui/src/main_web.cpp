@@ -958,6 +958,18 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     }
     g_hwnd = hwnd;
     g_core.SetOwnerWindow(hwnd);
+    // 启动时把"能不能转 wem"写进日志：用户报"检测不到 Wwise"时一眼可见（含找不到的路径）
+    {
+        const std::string envJson = g_core.Handle("wem.convertEnv", "{}");
+        const std::size_t p = envJson.find("\"wwisePath\":\"");
+        std::string wp;
+        if (p != std::string::npos) {
+            const std::size_t a = p + 13;
+            const std::size_t b = envJson.find('"', a);
+            if (b != std::string::npos) wp = envJson.substr(a, b - a);
+        }
+        LogLine("wwise: %s", wp.empty() ? "未找到 WwiseConsole.exe（装了 Wwise 需重启本工具；非 C/D/E 盘现已支持）" : wp.c_str());
+    }
     ::ShowWindow(hwnd, SW_SHOW);
     ::UpdateWindow(hwnd);
     // ★ 主窗口此时画出"启动加载画面"（WM_PAINT 里，不等 WebView），无白屏无方框；
