@@ -1,3 +1,7 @@
+# Sonar v2.38.3
+
+- 修复：更新后误报「插件 DLL 不是最新版」。
+
 # Sonar v2.38.2
 
 - 新增：nbnk 页可一键下载 ffmpeg（mp3/ogg 转换用）。

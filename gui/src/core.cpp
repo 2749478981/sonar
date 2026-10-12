@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#pragma comment(lib, "version.lib")   // GetFileVersionInfo（判定插件 DLL 版本）
 #include <fstream>
 #include <unordered_map>
 #include <cstdio>
@@ -1709,15 +1710,39 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
 }
 
     // 带 5 秒缓存的"插件 DLL 是不是旧的"判定（轮询里频繁调用，别每次都读文件）
+    // 插件 DLL 是不是旧的：比较 **版本资源**（DLL FileVersion vs GUI 版本）——
+    //   以前用"文件时间戳"判定，但 GUI-only 发布时 DLL 不会重新链接，时间戳天然更旧 → 误报。
+    //   版本号由发布脚本同时升级（app.h 与两个 resource.rc），所以永远准确。
     bool DllStaleCached() const {
         static unsigned long long sLast = 0;
         static bool sOld = false;
         const unsigned long long nowMs = ::GetTickCount64();
         if (nowMs - sLast > 5000) {
             sLast = nowMs;
-            const unsigned long long dt = DllWriteTimeUtc(BaseDir() + "..");
-            const unsigned long long et = ExeWriteTimeUtc();
-            sOld = (dt > 0 && et > 0 && dt + 600 < et);
+            sOld = false;
+            std::string dir = BaseDir() + "..";
+            if (!dir.empty() && dir.back() != '\\' && dir.back() != '/') dir += '\\';
+            const std::wstring dllW = Utf8ToWide(dir + "WeaponSoundEnhance.dll");
+            DWORD dummy = 0;
+            const DWORD sz = ::GetFileVersionInfoSizeW(dllW.c_str(), &dummy);
+            if (sz > 0) {
+                std::vector<unsigned char> buf(sz);
+                if (::GetFileVersionInfoW(dllW.c_str(), 0, sz, buf.data())) {
+                    VS_FIXEDFILEINFO* fi = nullptr;
+                    UINT len = 0;
+                    if (::VerQueryValueW(buf.data(), L"\\", (LPVOID*)&fi, &len) && fi) {
+                        const long long dllV = (long long)(fi->dwFileVersionMS >> 16) * 10000 +
+                                               (long long)(fi->dwFileVersionMS & 0xFFFF) * 100 +
+                                               (long long)(fi->dwFileVersionLS >> 16);
+                        // GUI 自己的版本（kWseGuiVersion，如 "2.38.2"）
+                        int a = 0, b = 0, c = 0;
+                        if (sscanf_s(kWseGuiVersion, "%d.%d.%d", &a, &b, &c) >= 2) {
+                            const long long guiV = (long long)a * 10000 + (long long)b * 100 + c;
+                            sOld = (dllV > 0 && dllV < guiV);
+                        }
+                    }
+                }
+            }
         }
         return sOld;
     }
