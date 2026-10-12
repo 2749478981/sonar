@@ -710,6 +710,9 @@ td .snd .badge.judge{background:var(--accent, #0a84ff); color:var(--on-accent, #
 /* ===========================================================================
    条目工具栏：搜索框收窄，派生/WEM 切换并入同一行（省一行高度）
    =========================================================================== */
-.cbar #searchBox{flex:0 1 220px; min-width:120px}
-.cbar .viewswitch.inline-switch{flex:0 0 auto; margin:0; gap:6px}
-.cbar .viewswitch.inline-switch .vs{flex:0 0 auto; padding:4px 12px; font-size:12.5px}
+/* 让搜索框独自吸收压缩：其它元素 nowrap + 不收缩，否则「只看激活组合」会被压成竖排、
+   按钮被挤扁，整栏变高（用户实测"这一栏为什么这么高"）。 */
+.cbar > *{white-space:nowrap; flex:0 0 auto}
+.cbar #searchBox{flex:1 1 60px; min-width:64px; max-width:none}
+.cbar .viewswitch.inline-switch{margin:0; gap:4px}
+.cbar .viewswitch.inline-switch .vs{flex:0 0 auto; padding:4px 9px; font-size:11.5px; white-space:nowrap}
