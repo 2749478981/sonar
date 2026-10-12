@@ -641,6 +641,12 @@ void CreateOverlayWindow() {
     wc.hInstance = ::GetModuleHandleW(nullptr);
     wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = L"SonarOverlayWnd";
+    // 左上角图标（与主窗口同一个 IDI_APP，resource.rc 里的多尺寸 ico）
+    {
+        HINSTANCE inst = ::GetModuleHandleW(nullptr);
+        wc.hIcon   = (HICON)::LoadImageW(inst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
+        wc.hIconSm = (HICON)::LoadImageW(inst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, 16, 16, LR_SHARED);
+    }
     ::RegisterClassExW(&wc);
 
     if (g_ovRect.left < 0 || g_ovRect.top < 0) {           // 首次：放屏幕右上角
@@ -670,6 +676,11 @@ void CreateOverlayWindow() {
     if (!g_ovHwnd) { LogLine("overlay: CreateWindowExW failed"); return; }
     LogLine("overlay: window created %ldx%ld topmost=%d",
             g_ovRect.right - g_ovRect.left, g_ovRect.bottom - g_ovRect.top, (int)g_ovTopmost);
+    {   // 显式设一次图标：标题栏左上角与任务栏都用它（类图标之外的兜底）
+        HINSTANCE inst = ::GetModuleHandleW(nullptr);
+        HICON ic = (HICON)::LoadImageW(inst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
+        if (ic) { ::SendMessageW(g_ovHwnd, WM_SETICON, ICON_BIG, (LPARAM)ic); ::SendMessageW(g_ovHwnd, WM_SETICON, ICON_SMALL, (LPARAM)ic); }
+    }
 
     if (!g_env) return;
     g_env->CreateCoreWebView2Controller(
