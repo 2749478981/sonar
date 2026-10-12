@@ -919,6 +919,8 @@ async function openEditor(index) {
   }
   ED.open = true; ED.index = index == null ? null : index;
   ED.draft = e;
+  // 有条件但没记预设（老配置）：下拉显示"自定义"，否则看起来像"不判定"（用户会以为设置丢了）
+  if (!e.judgePreset && (e.conds || []).length) e.judgePreset = 5;
   ED.isWem = !!(e && e.media != null && e.media > 0);
   ED.adv = !!(e.group || e.stop || (e.fsmTarget >= 0) || (e.checkTimeoutMs > 0) ||
               (e.gauge || []).some(g => g && g.length));
@@ -1285,6 +1287,12 @@ function fillConds() {
 
 async function saveEditor() {
   const e = ED.draft;
+  // ★ 选了判定模式预设但还没有条件 → 保存时自动按预设生成（否则窗口会被清空、
+  //   重新打开时下拉又变回"不判定"，用户看到的就是"选了没用"）
+  if (e.judgePreset >= 1 && e.judgePreset <= 4 && !(e.conds || []).length) {
+    applyJudgePreset();
+    toast('已按判定模式预设自动生成判定条件：请给每条条件加音效（没加音效的条件会被丢弃）', 'ok');
+  }
   // ★ 条件没有音效会被后端丢弃（空音效池的条件没有意义）→ 先提醒，别让用户白配
   const emptyConds = (e.conds || []).filter(c => !(c.pool && c.pool.length));
   if (emptyConds.length) {
@@ -1503,6 +1511,16 @@ async function setHotkey(key, code) {
 }
 
 function refreshUpdate() {
+  // ★ 游戏在运行时，插件 DLL 被占用：更新前先提醒（否则用户以为更新成功、其实没换）
+  const running = !!(ST.live && ST.live.attached);
+  const hint = $('#updDllHint');
+  if (hint) {
+    hint.hidden = !running;
+    hint.textContent = running
+      ? '⚠ 游戏正在运行：更新时插件 DLL 无法替换（文件被占用）。建议先关闭游戏再更新；'
+        + '若只更新了数据文件，DLL 会在你关闭游戏后重新点「立即更新」时替换。'
+      : '';
+  }
   const u = ST.upd;
   $('#updCur').textContent = 'v' + (ST.version || '—');
   // 同版本号但仓库资产更新（热修复包）：明确告诉用户"为什么要更新"
@@ -1626,8 +1644,13 @@ const ACTIONS = {
     try {
       const r = await Backend.call('combo.export', { weapon: w });
       if (r.cancelled) return;
-      toast(`已导出「${ST.active[w] || '默认'}」：${r.copied} 个音效`
-            + (r.missing ? `，${r.missing} 个音效文件缺失` : '') + `\n${r.zip}`, 'ok');
+          if (r.missing > 0) {
+            // ★ 缺音效必须醒目：否则对方导入后"只有条目没有声音"，还以为是导入坏了
+            toast(`已导出「${ST.active[w] || '默认'}」：条目 ${r.entries} 条，音效 ${r.copied} 个，`
+                  + `**${r.missing} 个音效文件缺失**。\n这个包不含缺失的音效，别人导入后需要自己放音效。\n${r.zip}`, 'err');
+          } else {
+            toast(`已导出「${ST.active[w] || '默认'}」：条目 ${r.entries} 条，音效 ${r.copied} 个\n${r.zip}`, 'ok');
+          }
     } catch (e) { toast('导出失败：' + e.message, 'err'); }
   },
   'combo.import': async () => {

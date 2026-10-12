@@ -53,6 +53,7 @@ struct SoundEntry {
     int checkOffsetMs = 150;      // 判定点在"实测最晚出伤时刻"之上留的余量
     bool endOnAction = true;      // 动作结束(含被打断)也作为判定时机
     int checkMode = 0;            // CheckMode=final(1)：把所有条件都改成窗口结束时评
+    int judgePreset = 0;          // 判定模式下拉的选择（0=不判定 1=造成伤害 2=登龙 3=大居 4=真蓄 5=自定义）
     std::vector<CondSpec> conds;
 
     int LmtAny() const { return lmt.empty() ? -1 : lmt.front(); }

@@ -362,6 +362,8 @@ bool LoadConfig(const std::string& path, Config& cfg) {
             std::string lv;
             for (char c : val) lv += (char)tolower((unsigned char)c);
             cur.checkMode = (lv == "final") ? 1 : 0;
+        } else if (key == "JudgePreset") {
+            cur.judgePreset = std::atoi(val.c_str());
         } else if (key == "FSMTarget") {
             cur.fsmTarget = std::atoi(val.c_str());
         } else if (key == "Group") {
@@ -460,6 +462,7 @@ static void WriteEntry(const SoundEntry& e, int n, std::string& o) {
         o += "CheckTimeoutMs=" + std::to_string(e.checkTimeoutMs) + "\r\n";
         if (e.endOnAction) o += "CheckEndOn=action\r\n";
         if (e.checkMode) o += "CheckMode=final\r\n";
+        if (e.judgePreset) o += "JudgePreset=" + std::to_string(e.judgePreset) + "\r\n";
         o += "CheckOffsetMs=" + std::to_string(e.checkOffsetMs) + "\r\n";
         for (const auto& c : e.conds) {
             if (c.pool.empty() || c.expr.empty()) continue;

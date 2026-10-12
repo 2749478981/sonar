@@ -1059,6 +1059,7 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     v.set("checkOffsetMs", JVal(e.checkOffsetMs));
     v.set("endOnAction", JVal(e.endOnAction));
     v.set("checkMode", JVal(e.checkMode));
+    v.set("judgePreset", JVal(e.judgePreset));
 
     JVal conds = JVal::arr();
     for (std::size_t i = 0; i < e.conds.size(); ++i) {
@@ -1167,6 +1168,7 @@ SoundEntry EntryFromJson(const JVal& v, const std::vector<std::string>& allowedC
     e.checkOffsetMs = v.optInt("checkOffsetMs", 150);
     e.endOnAction = v.optBool("endOnAction", true);
     e.checkMode = v.optInt("checkMode", 0);
+    e.judgePreset = v.optInt("judgePreset", 0);
 
     const JVal* jc = v.find("conds");
     if (jc && jc->isArr()) {
@@ -4757,7 +4759,9 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 }
                 const std::string kPlug = "nativePC/plugins/";
                 const std::string kData = "nativePC/plugins/WeaponSoundEnhance/";
-                int done = 0, failed = 0;
+                int done = 0, failed = 0, dllBlocked = 0;
+                // ★ 游戏在运行时 DLL 被占用：不能静默失败，要明确告诉用户"插件没换成"
+                const bool gameRunning = imp->live.attached || imp->liveOk;
                 bool needRestart = false;
                 const mz_uint num = mz_zip_reader_get_num_files(&z);
                 for (mz_uint i = 0; i < num; ++i) {
@@ -4812,16 +4816,32 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                     const std::wstring wdst = Utf8ToWide(dst);
                     const std::size_t slash = wdst.find_last_of(L'\\');
                     if (slash != std::wstring::npos) MakeDirs(wdst.substr(0, slash + 1));
-                    const bool ok = WriteWideFile(wdst, buf, len);
+                    // 插件 DLL：游戏正在运行时不替换（会被占用），只计数并稍后明确提示
+                    const bool isPluginDll = (dst.find("WeaponSoundEnhance.dll") != std::string::npos);
+                    bool ok = false;
+                    if (isPluginDll && gameRunning) {
+                        ++dllBlocked;
+                    } else {
+                        ok = WriteWideFile(wdst, buf, len);
+                    }
                     mz_free(buf);
                     if (ok) { ++done; if (isGuiExe) needRestart = true; }
-                    else ++failed;
+                    else if (!isPluginDll || !gameRunning) ++failed;
                 }
                 mz_zip_reader_end(&z);
                 ::DeleteFileW(tmpZip.c_str());
 
                 imp->updNeedRestart.store(needRestart);
                 imp->updInstalling.store(false);
+                if (dllBlocked > 0) {
+                    // 只更新了数据文件、没换 DLL：必须说清楚，否则用户以为更新成功
+                    std::lock_guard<std::mutex> lk(imp->updMx);
+                    imp->updMsg = "已更新 " + std::to_string(done) + " 个文件；但插件 DLL 未替换（游戏正在运行，文件被占用）。"
+                                  "请关闭游戏后重新点「立即更新」，或手动解压覆盖插件 DLL。";
+                    imp->updProgress.store(-1);
+                    imp->updState.store(3);   // 仍显示"可更新"，让用户能重试
+                    return;
+                }
                 if (done == 0) {
                     // ★ 一个文件都没装成功不能算成功（以前会显示"已更新 0 个文件"并当作最新，
                     //   把"包里结构不认"这类问题藏起来了）。
