@@ -2935,6 +2935,10 @@ Core::Impl* ImplOf(void* corePtr) {
 // 进度回调要跨 TU 用，写成文件内静态原子量（旧版也是全局原子量）
 namespace {
 std::atomic<int> gUpdProgress{-1};
+std::atomic<int> gFfmpegState{0};        // 0=未开始 1=下载中 2=完成 4=失败
+std::atomic<int> gFfmpegProgress{-1};
+std::mutex       gFfmpegMx;
+std::string      gFfmpegErr;
 void UpdProgressCb(std::size_t written, std::size_t total) {
     if (total > 0) gUpdProgress.store((int)(written * 100 / total));
     else gUpdProgress.store(-1);
@@ -5595,6 +5599,149 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             JVal d = JVal::obj();
             d.set("out", JVal(ToSlash(Utf8FromWide(outPath))));
             d.set("replaced", JVal((int)reps.size()));
+            return OkJson(d);
+        }
+
+        // ---------------- 一键下载 ffmpeg（wemkit\ffmpeg.exe）----------------
+        //  发布包不带 ffmpeg（体积大），用户第一次转 mp3/ogg 时会缺；这里给个一键下载：
+        //  从 gyan.dev 拉静态 essentials 包（单文件 ffmpeg.exe，不需要 DLL），解压出 bin\ffmpeg.exe。
+        if (method == "ffmpeg.download") {
+            if (gFfmpegState.load() == 1) {
+                JVal d = JVal::obj();
+                d.set("started", JVal(false));
+                d.set("state", JVal(1));
+                d.set("progress", JVal(gFfmpegProgress.load()));
+                return OkJson(d);
+            }
+            const std::string dst = im->exeDir + "wemkit\\ffmpeg.exe";
+            const std::string zip = im->exeDir + "wemkit\\_ffmpeg_dl.zip";
+            const std::string proxy = im->cfg.global.updateProxy;
+            ::CreateDirectoryW(Utf8ToWide(im->exeDir + "wemkit").c_str(), nullptr);
+            gFfmpegState.store(1);
+            gFfmpegProgress.store(0);
+            { std::lock_guard<std::mutex> lk(gFfmpegMx); gFfmpegErr.clear(); }
+            std::thread([dst, zip, proxy]() {
+                std::string err;
+                const bool ok = wseupd::HttpGetFile(
+                    L"www.gyan.dev", L"/ffmpeg/builds/ffmpeg-release-essentials.zip",
+                    proxy, true, wseupd::Widen(zip), err,
+                    [](std::size_t done, std::size_t total) {
+                        gFfmpegProgress.store(total > 0 ? (int)(done * 100 / total) : -1);
+                    });
+                if (!ok) {
+                    { std::lock_guard<std::mutex> lk(gFfmpegMx); gFfmpegErr = "下载失败：" + err; }
+                    gFfmpegState.store(4);
+                    return;
+                }
+                // 解压 zip 里任意 */bin/ffmpeg.exe → wemkit\ffmpeg.exe
+                bool extracted = false;
+                std::string exErr;
+                {
+                    mz_zip_archive z{};
+                    if (mz_zip_reader_init_file(&z, zip.c_str(), 0)) {
+                        const mz_uint n = mz_zip_reader_get_num_files(&z);
+                        for (mz_uint i = 0; i < n; ++i) {
+                            mz_zip_archive_file_stat st{};
+                            if (mz_zip_reader_file_stat(&z, i, &st) == MZ_FALSE) continue;
+                            std::string nm = st.m_filename;
+                            for (std::size_t k = 0; k < nm.size(); ++k) if (nm[k] == '\\') nm[k] = '/';
+                            // 找 .../bin/ffmpeg.exe（不取 ffplay/ffprobe）
+                            const std::string low = [&nm] { std::string s = nm; for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }();
+                            if (low.size() < 16) continue;
+                            if (low.compare(low.size() - 15, 15, "/bin/ffmpeg.exe") != 0) continue;
+                            if (!mz_zip_reader_extract_to_file(&z, i, dst.c_str(), 0)) { exErr = "解压失败"; continue; }
+                            extracted = true;
+                            break;
+                        }
+                        mz_zip_reader_end(&z);
+                    } else {
+                        exErr = "压缩包无法读取";
+                    }
+                }
+                ::DeleteFileW(Utf8ToWide(zip).c_str());   // 下载包用完删掉（80MB）
+                if (!extracted) {
+                    { std::lock_guard<std::mutex> lk(gFfmpegMx); gFfmpegErr = exErr.empty() ? "压缩包里没找到 ffmpeg.exe" : exErr; }
+                    gFfmpegState.store(4);
+                    return;
+                }
+                gFfmpegProgress.store(100);
+                gFfmpegState.store(2);   // 完成
+            }).detach();
+            JVal d = JVal::obj();
+            d.set("started", JVal(true));
+            d.set("state", JVal(1));
+            return OkJson(d);
+        }
+
+        if (method == "ffmpeg.status") {
+            JVal d = JVal::obj();
+            d.set("state", JVal(gFfmpegState.load()));
+            d.set("progress", JVal(gFfmpegProgress.load()));
+            { std::lock_guard<std::mutex> lk(gFfmpegMx); d.set("error", JVal(gFfmpegErr)); }
+            return OkJson(d);
+        }
+
+        // ---------------- nbnk → 可直接分享的 Mod 压缩包 ----------------
+        //  结构从 nativePC 开始：nativePC\sound\wwise\Windows\<bank>.nbnk
+        //  别人解压到游戏根目录即生效（和我们的发布包同一套约定）。
+        if (method == "bank.exportModZip") {
+            const std::string path = Trim(p.optStr("path"));            // 源 nbnk
+            const std::string src  = Trim(p.optStr("src"));             // 可选：已导出的 nbnk（带替换）
+            const std::string save = Trim(p.optStr("save"));            // 目标 zip
+            if (path.empty()) return ErrJson("缺少 path");
+            const std::string from = src.empty() ? path : src;
+            if (::GetFileAttributesW(Utf8ToWide(from).c_str()) == INVALID_FILE_ATTRIBUTES)
+                return ErrJson("找不到要打包的 nbnk（先导出一次再打包）");
+            std::size_t slb = path.find_last_of("\\/");
+            std::string bankName = (slb == std::string::npos) ? path : path.substr(slb + 1);
+            if (bankName.size() > 5) bankName.resize(bankName.size() - 5);   // 去掉 .nbnk
+            std::string savePath = save;
+            if (savePath.empty()) {
+                savePath = SaveFileDialog(owner, L"Mod 压缩包 (*.zip)\0*.zip\0所有文件 (*.*)\0*.*\0", L"zip",
+                                          Utf8ToWide(bankName + "_mod.zip"));
+                if (savePath.empty()) {
+                    JVal d = JVal::obj();
+                    d.set("cancelled", JVal(true));
+                    return OkJson(d);
+                }
+            }
+            // 读取 nbnk 内容
+            HANDLE h = ::CreateFileW(Utf8ToWide(from).c_str(), GENERIC_READ,
+                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (h == INVALID_HANDLE_VALUE) return ErrJson("读取 nbnk 失败");
+            LARGE_INTEGER sz{}; ::GetFileSizeEx(h, &sz);
+            std::vector<std::uint8_t> bytes((std::size_t)(sz.QuadPart > 0 ? sz.QuadPart : 0));
+            DWORD rd = 0;
+            const bool okRead = bytes.empty() ||
+                                (::ReadFile(h, bytes.data(), (DWORD)bytes.size(), &rd, nullptr) && rd == bytes.size());
+            ::CloseHandle(h);
+            if (!okRead) return ErrJson("读取 nbnk 内容失败");
+            // 打包：nativePC/sound/wwise/Windows/<bank>.nbnk
+            std::size_t sl = from.find_last_of("\\/");
+            std::string base = (sl == std::string::npos) ? from : from.substr(sl + 1);
+            const std::string arcName = "nativePC/sound/wwise/Windows/" + base;
+            mz_zip_archive z{};
+            if (!mz_zip_writer_init_heap(&z, 0, (std::size_t)1 << 20)) return ErrJson("初始化 zip 失败");
+            if (mz_zip_writer_add_mem(&z, arcName.c_str(), bytes.data(), bytes.size(), MZ_DEFAULT_COMPRESSION) == MZ_FALSE) {
+                mz_zip_writer_end(&z);
+                return ErrJson("写入 zip 失败");
+            }
+            void* buf = nullptr; std::size_t bufsz = 0;
+            if (mz_zip_writer_finalize_heap_archive(&z, &buf, &bufsz) == MZ_FALSE) {
+                mz_zip_writer_end(&z);
+                return ErrJson("取 zip 内容失败");
+            }
+            mz_zip_writer_end(&z);
+            PatchZipUtf8Flags((std::uint8_t*)buf, bufsz);
+            const bool okW = WriteWideFile(Utf8ToWide(savePath), buf, bufsz);
+            mz_free(buf);
+            if (!okW) return ErrJson("写 zip 文件失败");
+            JVal d = JVal::obj();
+            d.set("zip", JVal(ToSlash(savePath)));
+            d.set("entry", JVal(arcName));
+            d.set("size", JVal((long long)bytes.size()));
+            im->SetStatus("已导出 Mod 压缩包（解压到游戏根目录即可）：" + ToSlash(savePath));
             return OkJson(d);
         }
 

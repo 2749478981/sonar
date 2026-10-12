@@ -1959,9 +1959,32 @@ async function refreshConvertEnv() {
     const wwise = r.hasWwise
       ? 'Wwise ✓（可把 wav/mp3/ogg 转成 wem）'
       : '未检测到 Wwise ✗ —— 只能替换「已经是 .wem」的文件；要转换其他格式需安装 Wwise（免费，Audiokinetic 官网）';
-    const ff = r.hasFfmpeg ? 'ffmpeg ✓' : 'ffmpeg ✗（mp3/ogg 转换需要，放到 wemkit\\ffmpeg.exe）';
+    const ff = r.hasFfmpeg ? 'ffmpeg ✓' : 'ffmpeg ✗（mp3/ogg 转换需要）';
     const vg = r.hasVgmstream ? '试听解码 ✓' : '试听解码 ✗（缺 wemkit\\vgmstream）';
     el.textContent = '转换环境：' + wwise + '　|　' + ff + '　|　' + vg;
+    // ★ 缺 ffmpeg 时给一键下载（约 80MB，静态单文件版，不需要额外 DLL）
+    if (!r.hasFfmpeg) {
+      const st = await Backend.call('ffmpeg.status', {});
+      const btn = document.createElement('button');
+      btn.className = 'nav';
+      btn.style.marginLeft = '8px';
+      if (st.state === 1) {
+        btn.textContent = '正在下载 ffmpeg… ' + (st.progress >= 0 ? st.progress + '%' : '');
+        btn.disabled = true;
+        setTimeout(refreshConvertEnv, 1000);   // 轮询进度
+      } else {
+        btn.textContent = '一键下载 ffmpeg（约 80MB）';
+        btn.onclick = async () => {
+          btn.disabled = true;
+          btn.textContent = '开始下载…';
+          try { await Backend.call('ffmpeg.download', {}); } catch (e) { toast('下载失败：' + e.message, 'err'); }
+          setTimeout(refreshConvertEnv, 800);
+        };
+      }
+      el.appendChild(btn);
+      if (st.state === 2) toast('ffmpeg 已就绪 ✓', 'ok');
+      if (st.state === 4) toast('ffmpeg 下载失败：' + (st.error || '未知原因') + '（也可自己下载放到 wemkit\\ffmpeg.exe）', 'err');
+    }
     const brief = document.querySelector('#bankEnvBrief');
     if (brief) brief.textContent = r.hasWwise ? '（Wwise ✓）' : '（未检测到 Wwise）';
     el.className = r.hasWwise ? 'note ok' : 'note warn';
@@ -2068,6 +2091,16 @@ ACTIONS['bank.export'] = async () => {
   } catch (e) {
     toast('导出失败：' + e.message, 'err');
   } finally { btn.disabled = false; }
+};
+
+// 把导出的 nbnk 打包成可直接分享的 Mod 压缩包（结构从 nativePC 开始）
+ACTIONS['bank.exportModZip'] = async () => {
+  if (!BANK.path) { toast('先导入一个 nbnk', 'err'); return; }
+  try {
+    const r = await Backend.call('bank.exportModZip', { path: BANK.path });
+    if (r.cancelled) return;
+    toast('已导出 Mod 压缩包：解压到游戏根目录即可\n' + r.zip, 'ok');
+  } catch (e) { toast('导出失败：' + e.message, 'err'); }
 };
 
 /* ===========================================================================
