@@ -487,7 +487,26 @@ function entrySounds(e) {
 function soundSummary(e) {
   const all = entrySounds(e);
   const first = all[0] || null;
-  return { text: first ? first.path : '(无音效)', fixed: !!(first && first.fixed), count: all.length };
+  // ★ 只显示文件名：以前这里显示完整路径，长路径把「判定 / N 条」这些徽标挤出可见区
+  //   （用户实测反馈"选了多少条、是否判定都看不见了"）。完整路径放 title 里。
+  const base = p => {
+    const s = String(p || '').replace(/\\/g, '/');
+    const k = s.lastIndexOf('/');
+    return k >= 0 ? s.slice(k + 1) : s;
+  };
+  const conds = (e.conds || []).length;
+  const condSounds = (e.conds || []).reduce((n, c) => n + ((c.pool || []).length), 0);
+  const gaugeSounds = (e.gauge || []).reduce((n, g) => n + ((g || []).length), 0);
+  return {
+    text: first ? base(first.path) : '(无音效)',
+    fixed: !!(first && first.fixed),
+    count: all.length,
+    conds: conds,
+    // 池明细（给 title 用）：默认 x 条 · 判定条件 y 个（z 条）· 刃时 w 条
+    detail: `默认 ${(e.def || []).length} 条`
+          + (conds ? ` · 判定条件 ${conds} 个（共 ${condSounds} 条）` : '')
+          + (gaugeSounds ? ` · 刃时 ${gaugeSounds} 条` : ''),
+  };
 }
 function firstLmt(e) { return e.lmtAny || !e.lmt || !e.lmt.length ? -1 : e.lmt[0]; }
 
@@ -594,11 +613,13 @@ function renderTable() {
             '这个 media id 不在已收录的 nbnk 里，没有序号（它仍能正常触发）' },
             wemSeq(e) || '—')
         : h('td', { class: 'fsm' }, String(e.fsmId)),
-      h('td', { title: entrySounds(e).map(s => s.path).join('\n') || '没有音效' },
-        h('span', { class: 'snd' }, sm.text,
-        e.conds && e.conds.length ? h('span', { class: 'badge', text: '判定' }) : null,
-        sm.fixed ? h('span', { class: 'badge', text: 'F' }) : null,
-        sm.count > 1 ? h('span', { class: 'badge', text: '+' + (sm.count - 1) }) : null)),
+      // ★ 徽标放最前（长文件名不再把它们挤出可见区）；完整路径与池明细都放 title
+      h('td', { title: (sm.detail + '\n' + (entrySounds(e).map(s => s.path).join('\n') || '没有音效')) },
+        h('span', { class: 'snd' },
+          sm.count ? h('span', { class: 'badge cnt', text: sm.count + ' 条' }) : null,
+          sm.conds ? h('span', { class: 'badge judge', text: '判定 ' + sm.conds }) : null,
+          sm.fixed ? h('span', { class: 'badge', text: 'F' }) : null,
+          h('span', { class: 'sndname', text: sm.text }))),
       h('td', {}, h('div', { class: 'acts' },
         h('button', { onclick: ev => { ev.stopPropagation(); openEditor(i); } }, '编辑'),
         h('button', { onclick: async ev => {

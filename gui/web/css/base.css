@@ -699,3 +699,11 @@ tr.grpmem td:first-child{box-shadow:inset 3px 0 0 var(--c-blue, #3b82f6)}
 .poolbox > .poolhead .arrow{font-size:10px; color:var(--muted)}
 .poolbox > .poolhead.closed{padding-bottom:2px}
 .poolbox .addrow{padding-top:2px}
+/* ===========================================================================
+   条目表「音效」列：徽标（条数/判定/F）永远可见，长文件名只占剩余宽度并省略
+   =========================================================================== */
+td .snd{display:flex; align-items:center; gap:5px; min-width:0}
+td .snd .badge{flex:none}
+td .snd .sndname{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0}
+td .snd .badge.cnt{background:var(--panel-2); border:var(--bw) solid var(--chip-border); color:var(--muted)}
+td .snd .badge.judge{background:var(--c-blue, #3b82f6); color:#fff; border-color:transparent}
