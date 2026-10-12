@@ -1302,6 +1302,9 @@ struct Core::Impl {
     unsigned long long efxLastPoll = 0;
     std::string efxLogPath;
     std::string efxStatus;            // DLL 自检行（hook=ok … / 失败原因）
+    std::string efxStats;             // DLL 定期统计行（calls/weapon/other/dup）
+    std::string efxRawSample;         // 不在索引里的原始 (组,记录) 取样（诊断用）
+    int efxRawCount = 0;
     std::string curEfxTable;          // 最近一条特效
     int curEfxGroup = -1;
     int curEfxRec = -1;
@@ -1555,6 +1558,11 @@ struct Core::Impl {
                 }
             }
         }
+        // 特效捕获日志（同一个 plugins 目录；DLL 的 sonarefx 模块写）
+        for (const auto& d : cand) {
+            if (FsExists(d + "WeaponSoundEnhance_efx.log")) { efxLogPath = d + "WeaponSoundEnhance_efx.log"; break; }
+        }
+        if (efxLogPath.empty() && !cand.empty()) efxLogPath = cand[0] + "WeaponSoundEnhance_efx.log";
         for (const auto& d : cand) {
             // 新名（我们自己的 DLL 写）；旧名 SonarAudio.log 兼容老版本
             if (FsExists(d + "WeaponSoundEnhance_wem.log")) {
@@ -1568,11 +1576,6 @@ struct Core::Impl {
         }
         if (!cand.empty()) {   // log 还没生成（游戏没跑过）也先占位，运行时照常尝试
             wemLogPath = cand[0] + "WeaponSoundEnhance_wem.log";
-        // 特效捕获日志（同一个 plugins 目录；DLL 的 sonarefx 模块写）
-        for (const auto& d : cand) {
-            if (FsExists(d + "WeaponSoundEnhance_efx.log")) { efxLogPath = d + "WeaponSoundEnhance_efx.log"; break; }
-        }
-        if (efxLogPath.empty() && !cand.empty()) efxLogPath = cand[0] + "WeaponSoundEnhance_efx.log";
         }
     }
 
@@ -2331,16 +2334,38 @@ struct Core::Impl {
         if (efxStream.is_open() && efxStream.eof()) efxStream.clear();
         if (!efxStream.is_open()) {
             efxStream.open(efxLogPath, std::ios::binary);
-            if (efxStream.is_open()) efxStream.seekg(0, std::ios::end);   // 不回放历史
+            if (efxStream.is_open()) {
+                // ★ 首次打开读**日志尾部**（最近 64KB），而不是跳到文件末尾：
+                //   用户通常是"先打一会儿、再打开 GUI"，跳到末尾会让历史全被跳过，
+                //   界面显示"一条都没有"（实测就是这么被误判成"没捕获到"的）。
+                efxStream.seekg(0, std::ios::end);
+                const std::streamoff sz = efxStream.tellg();
+                if (sz > 65536) {
+                    efxStream.seekg(sz - 65536);
+                    std::string junk;
+                    std::getline(efxStream, junk);   // 丢掉被截断的半行
+                } else {
+                    efxStream.seekg(0);
+                }
+            }
         }
         if (!efxStream.is_open()) return;
         std::string line;
         while (std::getline(efxStream, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (line.empty()) continue;
-            if (line[0] == '#') {                      // 自检行：记下来给界面显示
+            if (line[0] == '#') {                      // 自检/统计行：记下来给界面显示
+                if (line.compare(0, 8, "# stats ") == 0) { efxStats = line.substr(8); continue; }
                 const std::size_t p = line.find("sonarefx ");
                 if (p != std::string::npos) efxStatus = line.substr(p + 9);
+                continue;
+            }
+            if (line.compare(0, 7, "efxraw ") == 0) {     // 诊断：不在索引里的原始调用（取样给界面）
+                if (efxRawSample.size() < 200) {
+                    if (!efxRawSample.empty()) efxRawSample += " · ";
+                    efxRawSample += line.substr(7);
+                }
+                ++efxRawCount;
                 continue;
             }
             if (line.compare(0, 4, "efx ") != 0) continue;
@@ -2348,9 +2373,12 @@ struct Core::Impl {
             unsigned seq = 0, group = 0, rec = 0;
             int recId = -1, weapon = -1;
             // 表名/组/记录/… 都是无空格 token，名字（路径）取到行尾
+            // ★ sscanf_s 必须在**指针后面**额外传缓冲区大小（把大小写在格式串里会
+            //   让它在栈上读到垃圾长度 → 越界 → 0xC0000005 崩溃，实测就是这么崩的）。
             if (sscanf_s(line.c_str(),
-                            "efx seq#%u table=%63s group=%u rec=%u id=%d weapon=%d name=%511[^\n]",
-                            &seq, table, &group, &rec, &recId, &weapon, name) < 7) continue;
+                         "efx seq#%u table=%63s group=%u rec=%u id=%d weapon=%d name=%511[^\n]",
+                         &seq, table, (unsigned)sizeof(table), &group, &rec, &recId, &weapon,
+                         name, (unsigned)sizeof(name)) < 7) continue;
             ++efxOkCount;
             // 去重：和最新一条相同 → 丢；或 500ms 内同 (表,组,记录) → 丢
             const bool sameTop = (!efxHist.empty() &&
@@ -2497,6 +2525,17 @@ struct Core::Impl {
         d.set("efxDup", JVal(efxDup));
         d.set("efxOk", JVal(efxOkCount));
         d.set("efxStatus", JVal(efxStatus));
+        d.set("efxStats", JVal(efxStats));
+        d.set("efxRawSample", JVal(efxRawSample));
+        d.set("efxRawCount", JVal(efxRawCount));
+        // 诊断：特效日志路径是否解析到、流是否打开（"一条都没有"时先看这个）
+        {
+            std::string bn = efxLogPath;
+            const std::size_t sl2 = bn.find_last_of("\\/");
+            if (sl2 != std::string::npos) bn = bn.substr(sl2 + 1);
+            d.set("efxLogName", JVal(bn));
+            d.set("efxStreamOpen", JVal(efxStream.is_open()));
+        }
         d.set("efxTable", JVal(curEfxTable));
         d.set("efxGroup", JVal(curEfxGroup));
         d.set("efxRec", JVal(curEfxRec));
@@ -4872,6 +4911,9 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             // 特效捕获：同样清日志 + 统计（scope=efx 或 all）
             if (doEfx) {
                 im->efxOkCount = 0;
+                im->efxStats.clear();
+                im->efxRawSample.clear();
+                im->efxRawCount = 0;
                 im->efxDup = 0;
                 im->curEfxTable.clear();
                 im->curEfxGroup = -1;

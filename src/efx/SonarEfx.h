@@ -46,6 +46,11 @@ const std::string& Status();
 void SetEnabled(bool on);
 bool Enabled();
 
+// 诊断开关（ini: EfxLogAll，默认开）：把**所有** hook 到的原始调用（含非武器表）
+// 也写进日志，每个 (组,记录) 只写一次（最多 300 个）。
+// 用途：区分"hook 根本没被调用"和"被调用了但值不在索引里"。
+void SetLogAll(bool on);
+
 // 当前武器类型提供者（-1 = 未知）：用于在多张候选表里挑对的那张
 void SetWeaponProvider(int (*fn)());
 

@@ -149,7 +149,12 @@ int main() {
     Check(text.find("table=hm_wp03 group=2005 rec=2") != std::string::npos, "记录了 (hm_wp03, 2005, 2)");
     Check(text.find("table=hm_wp03 group=2001 rec=0") != std::string::npos, "记录了 (hm_wp03, 2001, 0)");
     Check(text.find("gm_em_hole") == std::string::npos, "非武器表没写进日志");
-    Check(text.find("group=9999") == std::string::npos, "非武器调用没写进日志");
+    // 诊断模式下非武器调用会写 efxraw 行（便于定位"值不在索引里"），但绝不能混进 efx 行
+    Check(text.find("efx seq#2 table=gm_em_hole") == std::string::npos, "非武器调用没有混进 efx 行");
+    Check(text.find("efxraw group=9999 rec=9") != std::string::npos,
+          "诊断模式记录了原始 (组,记录)（efxraw）");
+    Check(text.find("# stats calls=4 weapon=3 other=1 dup=1") != std::string::npos,
+          "统计行内容正确（calls/weapon/other/dup）");
 
     // 5) 开关
     ::sonarefx::SetEnabled(false);

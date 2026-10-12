@@ -292,6 +292,19 @@ const Capture = (() => {
         const bad = st.indexOf('失败') >= 0 || st.indexOf('未找到') >= 0;
         host.appendChild(el('div', { class: 'note' + (bad ? ' warnchip' : ' dim'), text: '特效捕获：' + st }));
       }
+      // DLL 定期统计：区分「hook 没被调用」和「调用了但值不在索引里」
+      if (L.efxStats) {
+        host.appendChild(el('div', { class: 'note dim', text: '钩到调用：' + L.efxStats }));
+      }
+      if (!(L.efx || []).length && L.efxStatus && L.efxStatus.indexOf('挂钩成功') >= 0 &&
+          L.efxStats && L.efxStats.indexOf('calls=0') >= 0) {
+        host.appendChild(el('div', { class: 'note warnchip', text:
+          '⚠ 挂钩成功、但一次调用都没钩到：这版游戏的武器特效可能不走这个函数（需要换挂钩点）。' }));
+      }
+      if (!(L.efx || []).length && L.efxRawSample) {
+        host.appendChild(el('div', { class: 'note dim', text:
+          '（已钩到调用，但都不在 hm_wp* 表里）取样：' + L.efxRawSample.slice(0, 220) }));
+      }
       const allEfx = L.efx || [], efx = filterList(allEfx);
       // 实时行
       if (L.efxTable) {

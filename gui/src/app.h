@@ -6,7 +6,7 @@
 #include <atomic>
 
 // 当前 GUI 版本（显示在界面上、也用于和仓库最新版比较）
-inline constexpr const char* kWseGuiVersion = "2.37.6";
+inline constexpr const char* kWseGuiVersion = "2.37.7";
 
 // 条件表达式里的一项：<变量> <比较符> <数值>
 struct CondTerm {

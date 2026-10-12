@@ -744,6 +744,7 @@ volatile int gVolumePct = 100;
 volatile int gEnabled = 1;
 volatile int gMoreSounds = 1;   // legacy: only affects pools without any fixed sound
 volatile int gEfxCapture = 1;    // 特效捕获（实验性）：hook Effect:Ctor 记录武器特效调用
+volatile int gEfxLogAll = 1;      // 特效捕获诊断：记录所有原始调用（默认开，便于定位"一条都没有"）
 int EfxWeaponProvider() { return player::gWeapon; }   // 给 sonarefx 用：当前武器类型（挑表用）
 
 // --- wem 误触发抑制（进图/换区预加载）---
@@ -1906,6 +1907,7 @@ void LoadConfig()
                 else if (key == "Enabled") gEnabled = std::atoi(val.c_str()) != 0;
                 else if (key == "MoreSounds") gMoreSounds = std::atoi(val.c_str()) != 0;
             else if (key == "EfxCapture") gEfxCapture = std::atoi(val.c_str()) != 0;
+            else if (key == "EfxLogAll") gEfxLogAll = std::atoi(val.c_str()) != 0;
                 else if (key == "ChatEcho") g_useChatEcho = std::atoi(val.c_str()) != 0;
                 else if (key == "ChatCommands") g_useChatCommands = std::atoi(val.c_str()) != 0;
                 else if (key == "Hotkeys") g_hotkeysEnabled = std::atoi(val.c_str()) != 0;
@@ -3298,6 +3300,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
             std::string efxLog;
             ::sonarefx::SetWeaponProvider(&EfxWeaponProvider);
             ::sonarefx::SetEnabled(gEfxCapture != 0);
+            ::sonarefx::SetLogAll(gEfxLogAll != 0);
             ::sonarefx::Init(gModuleDir, efxLog);
             if (!efxLog.empty()) LogD("%s", efxLog.c_str());
         }

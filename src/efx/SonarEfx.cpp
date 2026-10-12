@@ -1,4 +1,4 @@
-﻿// ===========================================================================
+// ===========================================================================
 //  SonarEfx.cpp —— 特效捕获实现（见 SonarEfx.h 的设计说明）
 // ===========================================================================
 #include "SonarEfx.h"
@@ -50,6 +50,9 @@ std::unordered_map<std::uint64_t, std::vector<int>> g_lookup;   // key=(group<<3
 std::vector<Entry> g_entries;
 std::vector<std::string> g_tables;
 std::size_t   g_skipped = 0;   // 索引里被跳过的非 hm_wp* 表数（自检显示用）
+bool          g_logAll = true; // 诊断：记录所有原始调用（每个 (组,记录) 只记一次）
+std::unordered_map<std::uint64_t, int> g_rawSeen;   // 已记录的原始 (组,记录)
+std::uint64_t g_lastStats = 0;
 
 std::wstring  g_dir;
 std::wstring  g_logPath;
@@ -264,11 +267,18 @@ const Entry* PickEntry(const std::vector<int>& cands) {
     for (const int i : cands) {
         const Entry& en = g_entries[i];
         int score = 0;
-        if (w >= 0 && en.table.size() >= 8 && en.table.compare(0, 6, "hm_wp") == 0) {
-            const std::string num = en.table.substr(6, 2);
-            if (!num.empty() && std::atoi(num.c_str()) == w) score += 100;
+        // hm_wpNN / hm_wpNN_xx：前缀 "hm_wp" 是 5 个字符，两位数字在下标 5、6。
+        // ★ 这里错过两次：先写成 compare(0,6,"hm_wp") + size()>=8，而 "hm_wp03" 只有
+        //   7 个字符、数字在 5/6 → 判定永远不成立，退化成"取索引里第一条"，
+        //   于是拿太刀（w3）却记成 hm_wp11。实测日志 + 自检一起抓到的。
+        if (w >= 0 && en.table.size() >= 7 && en.table.compare(0, 5, "hm_wp") == 0) {
+            const char d0 = en.table[5], d1 = en.table[6];
+            if (d0 >= '0' && d0 <= '9' && d1 >= '0' && d1 <= '9' &&
+                ((d0 - '0') * 10 + (d1 - '0')) == w) score += 100;
         }
-        score += (int)(100 - std::min<std::size_t>(100, en.table.size()));   // 越短越优先（基础表）
+        // 同一 (组,记录) 在多个变体表里都有（hm_wp04 / hm_wp04_01）：优先基础表
+        if (en.table.find('_', 5) == std::string::npos) score += 50;
+        score += (int)(100 - std::min<std::size_t>(100, en.table.size()));   // 越短越优先
         if (score > bestScore) { bestScore = score; best = &en; }
     }
     return best;
@@ -354,6 +364,7 @@ bool Available() { return g_hooked; }
 const std::string& Status() { return g_status; }
 void SetEnabled(bool on) { g_enabled = on; }
 bool Enabled() { return g_enabled; }
+void SetLogAll(bool on) { g_logAll = on; }
 void SetWeaponProvider(int (*fn)()) { g_weaponFn = fn; }
 Stats GetStats() { return g_stats; }
 
@@ -368,7 +379,22 @@ void Flush() {
         g_tail.store((t + 1) % kRingSize, std::memory_order_release);
 
         const auto it = g_lookup.find(((std::uint64_t)rc.group << 32) | rc.rec);
-        if (it == g_lookup.end()) { ++g_stats.other; continue; }   // 不是武器特效
+        if (it == g_lookup.end()) {
+            ++g_stats.other;
+            // 诊断：把这个"不在索引里"的原始 (组,记录) 记一次（最多 300 个），
+            // 用来区分"hook 没被调用"和"调用了但值对不上"。
+            if (g_logAll && g_rawSeen.size() < 300) {
+                const std::uint64_t k = ((std::uint64_t)rc.group << 32) | rc.rec;
+                if (g_rawSeen.find(k) == g_rawSeen.end()) {
+                    g_rawSeen[k] = 1;
+                    char rl[96];
+                    _snprintf_s(rl, _TRUNCATE, "efxraw group=%u rec=%u weapon=%d\n",
+                                rc.group, rc.rec, g_weaponFn ? g_weaponFn() : -1);
+                    batch += rl;
+                }
+            }
+            continue;   // 不是武器特效
+        }
         const Entry* en = PickEntry(it->second);
         if (!en) { ++g_stats.other; continue; }
         ++g_stats.weapon;
@@ -385,6 +411,21 @@ void Flush() {
                     "efx seq#%u table=%s group=%u rec=%u id=%d weapon=%d name=%s\n",
                     ++g_seq, en->table.c_str(), rc.group, rc.rec, en->recId, w, en->path.c_str());
         batch += line;
+    }
+    // 定期把统计写进日志（GUI 显示"钩到几次调用 / 几条武器特效"）
+    // ★ 只在计数**有变化**时写：否则站着不动会每 5 秒刷一条一模一样的行（实测刷了几十条）。
+    {
+        static Stats s_last = Stats{};
+        const bool changed = (g_stats.calls != s_last.calls || g_stats.weapon != s_last.weapon ||
+                              g_stats.other != s_last.other || g_stats.dup != s_last.dup);
+        if (changed && now - g_lastStats >= 5000) {
+            g_lastStats = now;
+            s_last = g_stats;
+            char sl[192];
+            _snprintf_s(sl, _TRUNCATE, "# stats calls=%llu weapon=%llu other=%llu dup=%llu raw=%zu\n",
+                        g_stats.calls, g_stats.weapon, g_stats.other, g_stats.dup, g_rawSeen.size());
+            batch += sl;
+        }
     }
     if (!batch.empty()) AppendLog(batch);
 }
