@@ -42,6 +42,7 @@
   <ItemGroup>
     <ClCompile Include="efx_selftest.cpp" />
     <ClCompile Include="..\..\src\efx\SonarEfx.cpp" />
+    <ClCompile Include="..\..\src\efx\SonarEfxEpv.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -600,8 +600,58 @@ void ResampleTo(Wav& w, std::uint32_t targetRate = 44100)
     w.sampleRate = targetRate;
 }
 
-const int kMaxVoices = 6;   // simultaneous waveOut voices; excess is dropped
-std::atomic<int> gVoices{0};
+// ---------------------------------------------------------------------------
+//  声部管理：把"满了直接丢新的"改成"满了抢最旧的"
+//
+//  背景（用户实测）：5 个固定音效 + 1 个随机层 = 6 个同时发声，正好撞上原来的
+//  上限 kMaxVoices=6 → 第 6 个被**静默丢弃**，表现就是"最后一个固定音效时响时不响"。
+//  现在：上限提高，且满了先把最旧的声部打断，保证**新的这次一定响**。
+// ---------------------------------------------------------------------------
+const int kMaxVoices = 24;   // 同时发声上限（原来 6：5 固定 + 随机层就撞上限）
+
+struct VoiceEntry {
+    std::uint64_t id = 0;
+    std::uint64_t startMs = 0;
+    std::shared_ptr<std::atomic<bool>> kill;   // 置 true = 立刻打断这个声部
+};
+std::mutex gVoiceMx;
+std::vector<VoiceEntry> gVoiceList;
+std::atomic<std::uint64_t> gVoiceSeq{ 0 };
+std::atomic<int> gVoices{ 0 };   // 当前活跃声部计数（VoiceGuard 维护，日志/统计用）
+
+std::shared_ptr<std::atomic<bool>> AcquireVoice()
+{
+    auto flag = std::make_shared<std::atomic<bool>>(false);
+    std::lock_guard<std::mutex> lk(gVoiceMx);
+    if ((int)gVoiceList.size() >= kMaxVoices && !gVoiceList.empty()) {
+        std::size_t oldest = 0;
+        for (std::size_t i = 1; i < gVoiceList.size(); ++i)
+            if (gVoiceList[i].startMs < gVoiceList[oldest].startMs) oldest = i;
+        if (gVoiceList[oldest].kill) gVoiceList[oldest].kill->store(true);
+        plugin::LogD("[voice] cap %d reached: stealing oldest voice (不再丢新音效)", kMaxVoices);
+        gVoiceList.erase(gVoiceList.begin() + oldest);
+    }
+    VoiceEntry e;
+    e.id = ++gVoiceSeq;
+    e.startMs = ::GetTickCount64();
+    e.kill = flag;
+    gVoiceList.push_back(e);
+    return flag;
+}
+
+void ReleaseVoice(const std::shared_ptr<std::atomic<bool>>& flag)
+{
+    std::lock_guard<std::mutex> lk(gVoiceMx);
+    for (std::size_t i = 0; i < gVoiceList.size(); ++i)
+        if (gVoiceList[i].kill == flag) { gVoiceList.erase(gVoiceList.begin() + i); break; }
+}
+
+int ActiveVoices()
+{
+    std::lock_guard<std::mutex> lk(gVoiceMx);
+    return (int)gVoiceList.size();
+}
+
 // 停止信号：StopAll() 每次 +1；正在播放的声部如果发现自己的起始代次和当前不符，
 // 立刻 waveOutReset 打断。用于「命中某派生动作就停止播放」的 Stop 条目。
 std::atomic<std::uint64_t> gStopEpoch{0};
@@ -668,16 +718,15 @@ private:
     static DWORD WINAPI PlayWorker_Host(LPVOID param)
     {
         std::unique_ptr<PlayCtx> ctx(static_cast<PlayCtx*>(param));
-        if (gVoices.load() >= kMaxVoices) {
-            plugin::LogD("[voice] cap %d reached, voice dropped", kMaxVoices);
-            return 0;
-        }
+        // ★ 不再"满了丢新的"：登记一个声部，满了会先打断最旧的（见 AcquireVoice）
+        auto kill = AcquireVoice();
         VoiceGuard vg;
-        PlayWorker(*ctx);
+        PlayWorker(*ctx, kill);
+        ReleaseVoice(kill);
         return 0;
     }
 
-    static void PlayWorker(PlayCtx& ctx)
+    static void PlayWorker(PlayCtx& ctx, const std::shared_ptr<std::atomic<bool>>& kill)
     {
         if (ctx.samples.empty()) return;
         const std::uint64_t epoch = gStopEpoch.load(std::memory_order_relaxed);
@@ -685,7 +734,7 @@ private:
         if (ctx.delayMs > 0) {
             for (unsigned waited = 0; waited < ctx.delayMs; waited += 10) {
                 ::Sleep(10);
-                if (gStopEpoch.load(std::memory_order_relaxed) != epoch) return;
+                if (kill->load() || gStopEpoch.load(std::memory_order_relaxed) != epoch) return;
             }
         }
 
@@ -713,8 +762,8 @@ private:
         waveOutWrite(hwo, &hdr, sizeof(hdr));
         while ((hdr.dwFlags & WHDR_DONE) == 0) {
             ::Sleep(10);
-            if (gStopEpoch.load(std::memory_order_relaxed) != epoch) {
-                // 被 Stop 打断：waveOutReset 让当前缓冲立刻完成
+            if (kill->load() || gStopEpoch.load(std::memory_order_relaxed) != epoch) {
+                // 被 Stop / 被"抢声部"打断：waveOutReset 让当前缓冲立刻完成
                 ::waveOutReset(hwo);
                 while ((hdr.dwFlags & WHDR_DONE) == 0) ::Sleep(5);
                 break;
@@ -743,8 +792,10 @@ int gDebounceMs = 120;
 volatile int gVolumePct = 100;
 volatile int gEnabled = 1;
 volatile int gMoreSounds = 1;   // legacy: only affects pools without any fixed sound
-volatile int gEfxCapture = 1;    // 特效捕获（实验性）：hook Effect:Ctor 记录武器特效调用
-volatile int gEfxLogAll = 1;      // 特效捕获诊断：记录所有原始调用（默认开，便于定位"一条都没有"）
+volatile int gEfxCapture = 0;    // 特效捕获（实验性）：默认关闭 —— 不开就不扫描内存、不挂钩，零开销
+volatile int gEfxLogAll = 0;     // 诊断开关（仅 EfxCapture=1 时有效）
+volatile int gEfxDiscover = 0;  // 诊断开关（仅 EfxCapture=1 时有效）
+std::string   gEfxTablePref;     // ini: EfxTablePref=3=hm_wp03_25（同一 (组,记录) 在多个变体表里都有时用）
 int EfxWeaponProvider() { return player::gWeapon; }   // 给 sonarefx 用：当前武器类型（挑表用）
 
 // --- wem 误触发抑制（进图/换区预加载）---
@@ -1908,6 +1959,8 @@ void LoadConfig()
                 else if (key == "MoreSounds") gMoreSounds = std::atoi(val.c_str()) != 0;
             else if (key == "EfxCapture") gEfxCapture = std::atoi(val.c_str()) != 0;
             else if (key == "EfxLogAll") gEfxLogAll = std::atoi(val.c_str()) != 0;
+            else if (key == "EfxDiscover") gEfxDiscover = std::atoi(val.c_str()) != 0;
+            else if (key == "EfxTablePref") gEfxTablePref = val;
                 else if (key == "ChatEcho") g_useChatEcho = std::atoi(val.c_str()) != 0;
                 else if (key == "ChatCommands") g_useChatCommands = std::atoi(val.c_str()) != 0;
                 else if (key == "Hotkeys") g_hotkeysEnabled = std::atoi(val.c_str()) != 0;
@@ -2158,6 +2211,13 @@ void ReloadConfig() {
     // ★ 重载会重放/预加载 bank（用户反馈"每次重载都响一次装瓶"），
     //   所以把"稳定时刻"拨到现在：接下来 KillSettleMs 内的 wem 一律忽略。
     player::gStableSinceMs = ::GetTickCount64();
+    // ★ 特效索引也跟着重建：用户改完 .epv3（换路径/加组）后点重载即可生效，
+    //   不用重启游戏 —— 索引不刷新就会出现"有的特效完全捕获不到"。
+    {
+        std::string efxIdx;
+        if (::sonarefx::ReloadIndex(efxIdx)) LogD("[efx] 索引已重建：%s", efxIdx.c_str());
+        else                            LogD("[efx] 索引重建失败：%s", efxIdx.c_str());
+    }
 }
 
 // ===========================================================================
@@ -2171,7 +2231,10 @@ const audio::Wav* GetCached(const std::wstring& absPath)
     for (auto& p : gCache)
         if (p.first == key) return &p.second;
 
-    HANDLE h = ::CreateFileW(LongPathW(absPath).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+    // ★ 完整共享：否则我们读的时候用户的外部编辑器**无法保存**该音效文件，
+    //   编辑器写到一半失败就留下半截文件（用户反馈"编辑一半音效就损坏了"）。
+    HANDLE h = ::CreateFileW(LongPathW(absPath).c_str(), GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
         Log("audio not found: %s", key.c_str());
@@ -3298,11 +3361,19 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
         //   磁盘上的 exe 被 DRM 包裹（.text 全加密），所以只能扫内存；扫不到会在日志里写明原因。
         {
             std::string efxLog;
-            ::sonarefx::SetWeaponProvider(&EfxWeaponProvider);
-            ::sonarefx::SetEnabled(gEfxCapture != 0);
-            ::sonarefx::SetLogAll(gEfxLogAll != 0);
-            ::sonarefx::Init(gModuleDir, efxLog);
-            if (!efxLog.empty()) LogD("%s", efxLog.c_str());
+            // ★ 默认关闭：只有 ini 里 EfxCapture=1 才初始化（否则不扫内存、不挂钩，零开销）
+            if (gEfxCapture) {
+                ::sonarefx::SetWeaponProvider(&EfxWeaponProvider);
+                ::sonarefx::SetEnabled(true);
+                ::sonarefx::SetLogAll(gEfxLogAll != 0);
+                ::sonarefx::SetDiscover(gEfxDiscover != 0);
+                ::sonarefx::SetTablePrefs(gEfxTablePref);
+                ::sonarefx::Init(gModuleDir, efxLog);
+                if (!efxLog.empty()) LogD("%s", efxLog.c_str());
+            } else {
+                efxLog = "[efx] 已关闭（EfxCapture=0）：不扫描内存、不挂钩";
+                LogD("%s", efxLog.c_str());
+            }
         }
         HANDLE t = ::CreateThread(nullptr, 0, &WorkerProc, nullptr, 0, nullptr);
         if (t) ::CloseHandle(t);

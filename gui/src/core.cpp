@@ -618,9 +618,32 @@ bool WriteWideFile(const std::wstring& path, const void* data, std::size_t n) {
     return ok;
 }
 
+
+// 原子复制：先写 .tmp，校验大小后再改名到位。
+// ★ 直接 CopyFileW 的隐患：源文件正被编辑器写入时会留下**半截目标文件**，
+//   用户看到的就是"音效文件损坏、还得重新添加"（实测反馈）。
+bool CopyFileAtomic(const std::wstring& src, const std::wstring& dst) {
+    WIN32_FILE_ATTRIBUTE_DATA fad{};
+    if (!::GetFileAttributesExW(src.c_str(), GetFileExInfoStandard, &fad)) return false;
+    const unsigned long long srcSize = ((unsigned long long)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+    if (srcSize == 0) return false;
+    const std::wstring tmp = dst + L".tmp";
+    ::DeleteFileW(tmp.c_str());
+    if (!::CopyFileW(src.c_str(), tmp.c_str(), FALSE)) { ::DeleteFileW(tmp.c_str()); return false; }
+    WIN32_FILE_ATTRIBUTE_DATA t2{};
+    if (!::GetFileAttributesExW(tmp.c_str(), GetFileExInfoStandard, &t2)) { ::DeleteFileW(tmp.c_str()); return false; }
+    const unsigned long long tmpSize = ((unsigned long long)t2.nFileSizeHigh << 32) | t2.nFileSizeLow;
+    if (tmpSize != srcSize) { ::DeleteFileW(tmp.c_str()); return false; }   // 大小不符：源正在被写，放弃
+    if (!::MoveFileExW(tmp.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        ::DeleteFileW(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
 bool ReadWideFile(const std::wstring& path, std::string& out) {
     out.clear();
-    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER sz{};
@@ -768,7 +791,7 @@ DWORD WINAPI PvWorker(LPVOID param) {
     std::unique_ptr<PvCtx> ctx((PvCtx*)param);
     if (ctx->delayMs > 0) ::Sleep(ctx->delayMs);
 
-    HANDLE h = ::CreateFileW(ctx->path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+    HANDLE h = ::CreateFileW(ctx->path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return 0;
     LARGE_INTEGER sz{};
@@ -1255,6 +1278,8 @@ struct Core::Impl {
         int efxGroup = -1;
         int efxRec = -1;
         int efxRecId = -1;
+        int efxVia = -1;
+        std::string efxCand;   // 同一 (组,记录) 可能属于多张表：候选表名
         std::string efxPath;
         std::string time;
         unsigned long long ms = 0;     // GetTickCount64 时间戳，用于"短时间同动作合并"
@@ -1288,6 +1313,7 @@ struct Core::Impl {
     std::ifstream wemStream;
     unsigned long long wemLastPoll = 0;
     long long lastWemMedia = -2;                                   // 推送去重
+    int lastEfxRev = -1, lastWemRev = -1, lastDerRev = -1;   // 捕获列表修订号（变化也要推送！）
     int curWemMedia = -1;                                          // 最近一条 wem
     std::string curWemName;
     std::string curWemBank;
@@ -1302,12 +1328,15 @@ struct Core::Impl {
     unsigned long long efxLastPoll = 0;
     std::string efxLogPath;
     std::string efxStatus;            // DLL 自检行（hook=ok … / 失败原因）
+    unsigned long long efxLogPos = 0;   // 已读到哪（用于检测日志被清空/重建）
+    std::string efxIndexInfo;         // 索引来源与规模（# sonarefx index: 行）
     std::string efxStats;             // DLL 定期统计行（calls/weapon/other/dup）
     std::string efxRawSample;         // 不在索引里的原始 (组,记录) 取样（诊断用）
     int efxRawCount = 0;
     std::string curEfxTable;          // 最近一条特效
     int curEfxGroup = -1;
     int curEfxRec = -1;
+    int curEfxVia = -1;
     int curEfxWeapon = -1;
     std::string curEfxPath;
 
@@ -2326,7 +2355,46 @@ struct Core::Impl {
     //   日志由 DLL 的 sonarefx 模块写：hook 引擎的 Effect:Ctor，只记落在 hm_wp* 表里的调用。
     //   行格式：efx seq#N table=hm_wp03 group=2005 rec=2 id=-1 weapon=3 name=vfx\...
     //   头部还有一行 # sonarefx hook=ok ... / hook 失败原因（界面直接显示，不静默）
+    // "# sonarefx hook=ok thunks=N [T0@0xAE0090,...] tables=X entries=Y sig=..." → 给界面看的中文摘要
+    static std::string EfxHumanStatus(const std::string& s) {
+        auto num = [&s](const char* key) -> std::string {
+            const std::string k(key);
+            const std::size_t a = s.find(k);
+            if (a == std::string::npos) return std::string();
+            const std::size_t b = a + k.size();
+            std::size_t e = b;
+            while (e < s.size() && s[e] != ' ' && s[e] != ',') ++e;
+            return s.substr(b, e - b);
+        };
+        const std::string thunks = num("thunks=");
+        const std::string tables = num("tables=");
+        const std::string entries = num("entries=");
+        std::string out = "挂钩成功";
+        if (!thunks.empty()) out += "：" + thunks + " 条特效跳板";
+        if (!tables.empty()) out += " · 索引 " + tables + " 表 / " + entries + " 条";
+        return out;
+    }
+
+    // ---- 特效捕获（实验性）：读 plugins\WeaponSoundEnhance_efx.log ----
+    //   日志由 DLL 的 sonarefx 模块写：挂钩引擎的特效生成函数，只记落在 hm_wp* 表里的调用。
+    //   行格式：efx seq#N via=Tn table=hm_wp03 group=2005 rec=2 id=-1 weapon=3 name=vfx\...
+    //   头部/定期还有 # sonarefx status:… / index:… / # stats …（界面直接显示，不静默）
     void RecordEfxEvents() {
+        if (cfg.global.efxCapture == 0) return;   // 模块已关闭：不读日志（零开销）
+        // ★ 文件被删/被清空时自动重开：Windows 下"文件删除后旧句柄仍指向旧数据"，
+        //   界面会永远读不到新内容（实测：清空日志后 GUI 一直显示"一个都捕获不到"）。
+        {
+            WIN32_FILE_ATTRIBUTE_DATA fad{};
+            const bool exists = ::GetFileAttributesExW(Utf8ToWide(efxLogPath).c_str(),
+                                                       GetFileExInfoStandard, &fad) != FALSE;
+            const unsigned long long sz = exists
+                ? (((unsigned long long)fad.nFileSizeHigh << 32) | fad.nFileSizeLow) : 0ULL;
+            if (!exists || sz < efxLogPos) {
+                if (efxStream.is_open()) efxStream.close();
+                efxLogPos = 0;
+            }
+        }
+
         const unsigned long long nowMs = ::GetTickCount64();
         if (nowMs - efxLastPoll < 250) return;
         efxLastPoll = nowMs;
@@ -2335,13 +2403,24 @@ struct Core::Impl {
         if (!efxStream.is_open()) {
             efxStream.open(efxLogPath, std::ios::binary);
             if (efxStream.is_open()) {
-                // ★ 首次打开读**日志尾部**（最近 64KB），而不是跳到文件末尾：
-                //   用户通常是"先打一会儿、再打开 GUI"，跳到末尾会让历史全被跳过，
-                //   界面显示"一条都没有"（实测就是这么被误判成"没捕获到"的）。
+                // 先把文件**开头**的自检行读掉（hook 结果 / 索引来源）：日志大了以后
+                // 那些行会落在"尾部 64KB"窗口之外，界面就一直空着（实测问题）。
+                std::ifstream head(efxLogPath, std::ios::binary);
+                std::string l1;
+                for (int k = 0; k < 6 && std::getline(head, l1); ++k) {
+                    if (!l1.empty() && l1.back() == '\r') l1.pop_back();
+                    if (l1.compare(0, 11, "# sonarefx ") != 0) continue;
+                    const std::string s = l1.substr(11);
+                    if (s.compare(0, 6, "index:") == 0) { efxIndexInfo = s.substr(7); continue; }
+                    if (s.compare(0, 7, "status:") == 0) { efxStatus = s.substr(8); continue; }
+                    if (s.compare(0, 8, "hook=ok ") == 0) efxStatus = EfxHumanStatus(s);
+                }
+                // 首次打开读**日志尾部**（最近 64KB）：用户通常是"先打一会儿、再打开 GUI"，
+                // 跳到末尾会让已有记录全被跳过（会被误判成"没捕获到"）。
                 efxStream.seekg(0, std::ios::end);
-                const std::streamoff sz = efxStream.tellg();
-                if (sz > 65536) {
-                    efxStream.seekg(sz - 65536);
+                const std::streamoff endPos = efxStream.tellg();
+                if (endPos > 65536) {
+                    efxStream.seekg(endPos - 65536);
                     std::string junk;
                     std::getline(efxStream, junk);   // 丢掉被截断的半行
                 } else {
@@ -2350,6 +2429,7 @@ struct Core::Impl {
             }
         }
         if (!efxStream.is_open()) return;
+
         std::string line;
         while (std::getline(efxStream, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -2357,7 +2437,15 @@ struct Core::Impl {
             if (line[0] == '#') {                      // 自检/统计行：记下来给界面显示
                 if (line.compare(0, 8, "# stats ") == 0) { efxStats = line.substr(8); continue; }
                 const std::size_t p = line.find("sonarefx ");
-                if (p != std::string::npos) efxStatus = line.substr(p + 9);
+                if (p == std::string::npos) continue;
+                const std::string s = line.substr(p + 9);
+                if (s.compare(0, 8, "hook=ok ") == 0) {
+                    efxStatus = EfxHumanStatus(s);
+                } else if (s.compare(0, 7, "status:") == 0) {
+                    efxStatus = s.substr(8);
+                } else if (s.compare(0, 6, "index:") == 0) {
+                    efxIndexInfo = s.substr(7);
+                }
                 continue;
             }
             if (line.compare(0, 7, "efxraw ") == 0) {     // 诊断：不在索引里的原始调用（取样给界面）
@@ -2369,18 +2457,16 @@ struct Core::Impl {
                 continue;
             }
             if (line.compare(0, 4, "efx ") != 0) continue;
-            char table[64] = {}, name[512] = {};
-            unsigned seq = 0, group = 0, rec = 0;
+            char table[64] = {}, cand[128] = {}, name[512] = {};
+            unsigned seq = 0, via = 0, group = 0, rec = 0;
             int recId = -1, weapon = -1;
-            // 表名/组/记录/… 都是无空格 token，名字（路径）取到行尾
-            // ★ sscanf_s 必须在**指针后面**额外传缓冲区大小（把大小写在格式串里会
-            //   让它在栈上读到垃圾长度 → 越界 → 0xC0000005 崩溃，实测就是这么崩的）。
+            // ★ sscanf_s 必须在**指针后面**额外传缓冲区大小（写进格式串会让它从栈上
+            //   读到垃圾长度 → 越界 → 0xC0000005 崩溃，实测就是这么崩的）。
             if (sscanf_s(line.c_str(),
-                         "efx seq#%u table=%63s group=%u rec=%u id=%d weapon=%d name=%511[^\n]",
-                         &seq, table, (unsigned)sizeof(table), &group, &rec, &recId, &weapon,
-                         name, (unsigned)sizeof(name)) < 7) continue;
+                         "efx seq#%u via=T%u table=%63s cand=%127s group=%u rec=%u id=%d weapon=%d name=%511[^\n]",
+                         &seq, &via, table, (unsigned)sizeof(table), cand, (unsigned)sizeof(cand), &group, &rec, &recId, &weapon,
+                         name, (unsigned)sizeof(name)) < 9) continue;
             ++efxOkCount;
-            // 去重：和最新一条相同 → 丢；或 500ms 内同 (表,组,记录) → 丢
             const bool sameTop = (!efxHist.empty() &&
                                   efxHist.front().efxTable == table &&
                                   efxHist.front().efxGroup == (int)group &&
@@ -2400,6 +2486,8 @@ struct Core::Impl {
             h.efxGroup = (int)group;
             h.efxRec = (int)rec;
             h.efxRecId = recId;
+            h.efxVia = (int)via;
+            h.efxCand = cand;
             h.efxPath = name;
             h.weapon = weapon;
             h.ms = nowMs;
@@ -2410,14 +2498,15 @@ struct Core::Impl {
             curEfxTable = table;
             curEfxGroup = (int)group;
             curEfxRec = (int)rec;
+            curEfxVia = (int)via;
             curEfxPath = name;
             curEfxWeapon = weapon;
         }
+        efxLogPos = (unsigned long long)efxStream.tellg();
+        if (efxLogPos == (unsigned long long)-1) efxLogPos = 0;   // tellg 失败
         efxStream.clear();
         efxStream.seekg(0, std::ios::end);
     }
-
-    // 特效捕获列表 → JSON
     JVal EfxJson() const {
         JVal a = JVal::arr();
         for (std::size_t i = 0; i < efxHist.size(); ++i) {
@@ -2428,6 +2517,8 @@ struct Core::Impl {
             h.set("group", JVal(e.efxGroup));
             h.set("rec", JVal(e.efxRec));
             h.set("recId", JVal(e.efxRecId));
+            h.set("via", JVal(e.efxVia));
+            h.set("cand", JVal(e.efxCand));
             h.set("name", JVal(e.efxPath));
             h.set("weapon", JVal(e.weapon));
             h.set("time", JVal(e.time));
@@ -2520,12 +2611,14 @@ struct Core::Impl {
         d.set("wem", WemJson());
         // 特效捕获（实验性）
         d.set("efx", EfxJson());
+        d.set("efxEnabled", JVal(cfg.global.efxCapture != 0));
         d.set("efxRev", JVal(efxRev));
         d.set("efxCount", JVal((int)efxHist.size()));
         d.set("efxDup", JVal(efxDup));
         d.set("efxOk", JVal(efxOkCount));
         d.set("efxStatus", JVal(efxStatus));
         d.set("efxStats", JVal(efxStats));
+        d.set("efxIndex", JVal(efxIndexInfo));
         d.set("efxRawSample", JVal(efxRawSample));
         d.set("efxRawCount", JVal(efxRawCount));
         // 诊断：特效日志路径是否解析到、流是否打开（"一条都没有"时先看这个）
@@ -2903,7 +2996,7 @@ std::string RelPathForPicked(void* corePtr, const std::wstring& f, bool& copiedF
     }
     if (bad) {
         ::CreateDirectoryW(targetNorm.c_str(), nullptr);
-        ::CopyFileW(f.c_str(), (targetNorm + fn).c_str(), FALSE);
+        CopyFileAtomic(f, targetNorm + fn);
         copiedFallback = true;
         rel = "sounds/" + Utf8FromWide(fn);
     }
@@ -3080,7 +3173,7 @@ bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::s
 
                 const std::size_t dd = outSub.find_last_of(L'\\');
                 if (dd != std::wstring::npos) MakeDirs(outDir + outSub.substr(0, dd + 1));
-                if (::CopyFileW(src.c_str(), (outDir + outSub).c_str(), FALSE)) ++copied;
+                if (CopyFileAtomic(src, outDir + outSub)) ++copied;
                 else ++missing;
                 srcToRel[key] = newRel;
                 sp.path = newRel;
@@ -3217,7 +3310,7 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
                     MakeDirs(dstDirW);
                     const std::wstring dst = dstDirW + baseW;
                     if (::GetFileAttributesW(dst.c_str()) == INVALID_FILE_ATTRIBUTES) {
-                        if (::CopyFileW(src.c_str(), dst.c_str(), FALSE)) ++sndCopied;
+                        if (CopyFileAtomic(src, dst)) ++sndCopied;
                         else { ++sndMissing; continue; }
                     }
                     sp.path = "sounds/" + folder + "/" + base;
@@ -5344,7 +5437,12 @@ std::string Core::PollEvents() {
                              inScene != im->lastInScene || err != im->lastError ||
                              fsm != im->lastFsm || lmt != im->lastLmt ||
                              weapon != im->lastWeapon || weaponId != im->lastWeaponId ||
-                             im->curWemMedia != im->lastWemMedia;
+                             im->curWemMedia != im->lastWemMedia ||
+                             // ★ 捕获列表变了也必须推送：以前只比 fsm/lmt/武器，站着不动时
+                             //   新捕获（或游戏退出后）永远推不出去 → 界面一直显示旧数据（实测）
+                             im->efxRev != im->lastEfxRev ||
+                             im->wemRev != im->lastWemRev ||
+                             im->derRev != im->lastDerRev;
         if (!changed) {
             // UI 偏好有改动就顺手落盘（重连/清历史这类操作不改变 live 值，
             // 但窗口尺寸等偏好不能等到退出才写），最多 1 秒写一次。
@@ -5365,6 +5463,9 @@ std::string Core::PollEvents() {
         im->lastWeapon = weapon;
         im->lastWeaponId = weaponId;
         im->lastWemMedia = im->curWemMedia;
+        im->lastEfxRev = im->efxRev;
+        im->lastWemRev = im->wemRev;
+        im->lastDerRev = im->derRev;
 
         JVal ev = JVal::obj();
         ev.set("event", JVal(std::string("live")));

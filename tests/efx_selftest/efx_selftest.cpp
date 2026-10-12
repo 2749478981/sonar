@@ -178,6 +178,36 @@ int main() {
         std::printf("       Status: %s\n", ::sonarefx::Status().c_str());
     }
 
+
+    // 7) 真实游戏目录：用**磁盘上实际的 .epv3** 重建索引，验证"改过表也能捕获到"
+    {
+        const std::wstring gameRoot = L"F:\\SteamLibrary\\steamapps\\common\\Monster Hunter World\\";
+        if (::GetFileAttributesW((gameRoot + L"nativePC").c_str()) == INVALID_FILE_ATTRIBUTES) {
+            std::printf("       （跳过：本机没有该游戏目录）\n");
+        } else {
+            std::string summary;
+            const bool okIdx = ::sonarefx::ReloadIndexFrom(gameRoot, summary);
+            Check(okIdx, "用真实游戏目录重建索引成功");
+            std::printf("       %s\n", summary.c_str());
+
+            // hm_wp11 组2008 记录2..9：快照里没有、磁盘表里有（实测 13 条差异中的一部分）
+            int hit = 0;
+            std::string t0, p0;
+            for (int r = 0; r <= 9; ++r) {
+                std::string tb, pp;
+                if (::sonarefx::LookupEfx(2008, r, 11, tb, pp)) { ++hit; if (t0.empty()) { t0 = tb; p0 = pp; } }
+            }
+            std::printf("       hm_wp11 组2008：命中 %d/10 条，例：%s %s\n", hit, t0.c_str(), p0.c_str());
+            Check(hit >= 8, "磁盘表里的 (组2008,记录) 已被索引收录（快照里没有的也在）");
+            Check(t0 == "hm_wp11", "按武器挑表正确（弓 → hm_wp11）");
+
+            // 太刀：同一 (组,记录) 应挑到 hm_wp03
+            std::string tb2, pp2;
+            if (::sonarefx::LookupEfx(2002, 0, 3, tb2, pp2))
+                std::printf("       组2002 记录0 武器3 → %s\n", tb2.c_str());
+            Check(tb2 == "hm_wp03", "同一 (组,记录) 按武器 3 挑到 hm_wp03");
+        }
+    }
     std::printf("\n结果: %s（失败 %d 项）\n", g_fail ? "有失败" : "全部通过", g_fail);
     return g_fail ? 1 : 0;
 }

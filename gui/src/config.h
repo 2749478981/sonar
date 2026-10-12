@@ -70,6 +70,10 @@ struct GlobalSettings {
     int volume = 50;
     int enabled = 1;
     int moreSounds = 1;         // 旧全局开关：仅对无固定音效的纯旧条目生效
+    // 特效捕获（实验性）：与 DLL 的 sonarefx 模块对应
+    int efxCapture = 1;          // 0 = 关闭特效捕获
+    int efxLogAll = 1;           // 1 = 把不在索引里的原始调用也写进日志（诊断）
+    int efxDiscover = 1;         // 1 = 挂钩 provider 虚表槽，找真正的特效入口（诊断）
     std::string gaugePtrOff = "0x76B0";   // 太刀气刃对象偏移（十六进制）
     std::string gaugeValOff = "0x2370";   // 气刃等级偏移（十六进制）
     std::string chargeValOff = "0x2358";  // 大剑蓄力等级偏移（十六进制）

@@ -138,8 +138,10 @@ const Capture = (() => {
 
   // 特效行：表 · 组 · 记录（标识 = epv 表 + group + 组内记录下标）
   function efxRow(r) {
-    const label = `${r.table} · 组${r.group} · #${r.rec}`;
-    const meta = (r.name || '') + (r.recId >= 0 ? `　id=${r.recId}` : '') +
+    const label = r.table + ' · 组' + r.group + ' · #' + r.rec + (r.via >= 0 ? '  [T' + r.via + ']' : '');
+    const cands = (r.cand || '').split(',').filter(Boolean);
+    const candTxt = cands.length > 1 ? ('　候选表:' + cands.join('/') ) : '';
+    const meta = (r.name || '') + (r.recId >= 0 ? `　id=${r.recId}` : '') + candTxt +
                  (r.weapon >= 0 ? `　w${r.weapon}` : '');
     return el('div', { class: 'hrec efx two', title: label + '\n' + (r.name || '') },
       el('div', { class: 'l1' },
@@ -153,6 +155,7 @@ const Capture = (() => {
   function renderHost(host) {    const a = API();
     if (!a) { host.textContent = '界面模块未就绪（SonarAPI 缺失）'; return; }
     const page = host.dataset.page || 'main';
+    if (S.view === 'efx' && !L.efxEnabled) S.view = 'derived';   // 模块关闭时不留空视图
     const L = live();
     host.innerHTML = '';
 
@@ -179,8 +182,8 @@ const Capture = (() => {
         onclick: () => { S.view = 'derived'; render(); } }),
       el('button', { class: 'vs' + (S.view === 'wem' ? ' on' : ''), text: 'WEM 音效',
         onclick: () => { S.view = 'wem'; render(); } }),
-      el('button', { class: 'vs' + (S.view === 'efx' ? ' on' : ''), text: '武器特效',
-        onclick: () => { S.view = 'efx'; render(); } })));
+      (L.efxEnabled ? el('button', { class: 'vs' + (S.view === 'efx' ? ' on' : ''), text: '武器特效',
+        onclick: () => { S.view = 'efx'; render(); } }) : null)));
 
     // 过滤提示（显式 + 一键清除 + 隐藏条数）
     const allDer = L.der || [], allWem = L.wem || [];
@@ -291,6 +294,7 @@ const Capture = (() => {
       if (st) {
         const bad = st.indexOf('失败') >= 0 || st.indexOf('未找到') >= 0;
         host.appendChild(el('div', { class: 'note' + (bad ? ' warnchip' : ' dim'), text: '特效捕获：' + st }));
+      if (L.efxIndex) host.appendChild(el('div', { class: 'note dim', text: '索引：' + L.efxIndex }));
       }
       // DLL 定期统计：区分「hook 没被调用」和「调用了但值不在索引里」
       if (L.efxStats) {

@@ -258,6 +258,9 @@ bool LoadConfig(const std::string& path, Config& cfg) {
                 else if (key == "Volume") cfg.global.volume = std::atoi(val.c_str());
                 else if (key == "Enabled") cfg.global.enabled = std::atoi(val.c_str());
                 else if (key == "MoreSounds") cfg.global.moreSounds = std::atoi(val.c_str());
+        else if (key == "EfxCapture")  cfg.global.efxCapture  = std::atoi(val.c_str());
+        else if (key == "EfxLogAll")   cfg.global.efxLogAll   = std::atoi(val.c_str());
+        else if (key == "EfxDiscover") cfg.global.efxDiscover = std::atoi(val.c_str());
                 else if (key == "Debug") cfg.global.debug = std::atoi(val.c_str());
                 else if (key == "GaugePtrOff") cfg.global.gaugePtrOff = val;
                 else if (key == "GaugeValOff") cfg.global.gaugeValOff = val;
@@ -508,6 +511,10 @@ bool SaveConfig(const std::string& path, const Config& cfg) {
     o += "Volume=" + std::to_string(cfg.global.volume) + "\r\n";
     o += "Enabled=" + std::to_string(cfg.global.enabled) + "\r\n";
     o += "MoreSounds=" + std::to_string(cfg.global.moreSounds) + "\r\n";
+    o += "; 特效捕获（实验性）：0 = 关闭捕获；EfxLogAll / EfxDiscover 是诊断开关（默认 1）\r\n";
+    o += "EfxCapture=" + std::to_string(cfg.global.efxCapture) + "\r\n";
+    o += "EfxLogAll=" + std::to_string(cfg.global.efxLogAll) + "\r\n";
+    o += "EfxDiscover=" + std::to_string(cfg.global.efxDiscover) + "\r\n";
     o += "Debug=" + std::to_string(cfg.global.debug) + "\r\n";
     o += "GaugePtrOff=" + cfg.global.gaugePtrOff + "\r\n";
     o += "GaugeValOff=" + cfg.global.gaugeValOff + "\r\n";

@@ -51,11 +51,32 @@ bool Enabled();
 // 用途：区分"hook 根本没被调用"和"被调用了但值不在索引里"。
 void SetLogAll(bool on);
 
+// 发现模式（ini: EfxDiscover，默认开）：挂钩 provider 虚表槽，找出真正的特效创建入口。
+// 纯观察：只记录调用参数，不改变行为。诊断完可关掉。
+void SetDiscover(bool on);
+
+// 每把武器的特效表偏好（ini: EfxTablePref=3=hm_wp03_25）
+void SetTablePrefs(const std::string& spec);
+
 // 当前武器类型提供者（-1 = 未知）：用于在多张候选表里挑对的那张
 void SetWeaponProvider(int (*fn)());
 
 // 主循环每帧调用：把 hook 记下的事件查表 + 写日志
 void Flush();
+
+// 重建索引（重新扫 nativePC 下真实的 .epv3）。改完特效表后调用即可生效，不用重启游戏。
+// 返回 false 时 summary 写明原因。
+bool ReloadIndex(std::string& summary);
+
+// 索引摘要（GUI/日志显示：几张表、几条记录、覆盖了几个磁盘文件）
+const std::string& IndexSummary();
+
+// 用指定游戏目录重建索引（自检/工具用；游戏内用 ReloadIndex 即可）
+bool ReloadIndexFrom(const std::wstring& gameRoot, std::string& summary);
+
+// 查询某个 (组,记录) 是否属于武器特效表（weapon 用于在多张候选表里挑对的那张）。
+// 命中时 table/path 写出表名与资源路径。
+bool LookupEfx(int group, int rec, int weapon, std::string& table, std::string& path);
 
 // 统计（GUI 显示用）
 struct Stats {
