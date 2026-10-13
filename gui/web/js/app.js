@@ -1733,8 +1733,14 @@ const ACTIONS = {
           if (r.missing > 0) {
             // ★ 把具体缺失路径列出来（用户/我们才能判断是路径解析问题还是文件真不在）
             const miss = (r.missingSample || []).map(s => '  · ' + s).join('\n');
-            const go = await confirmBox({ title: '导出完成，但有音效缺失', okText: '知道了',
-              message: `条目 ${r.entries} 条，已打包音效 ${r.copied} 个，缺失 ${r.missing} 个。\n\n缺失的路径（前几个）：\n${miss || '(无样本)'}\n\n这些音效不会进包，别人导入后需要自己放。\n若这些文件其实存在，请把上面的路径发给我排查。` });
+            // 路径过长 / 无权限 / 被占用 这类失败：以管理员身份重新启动通常能解决（用户实测有效）
+            const permish = /错误码|无权限|占用|过长|无法创建目标目录/.test(miss);
+            const hint = permish
+              ? '\n\n👉 上面若提示「路径过长 / 无权限 / 无法创建目标目录」：\n'
+                + '请关闭本工具，右键「以管理员身份运行」后再导出一次（多数情况即可解决）。'
+              : '';
+            await confirmBox({ title: '导出完成，但有音效缺失', okText: '知道了',
+              message: `条目 ${r.entries} 条，已打包音效 ${r.copied} 个，缺失 ${r.missing} 个。\n\n缺失的路径（前几个）：\n${miss || '(无样本)'}\n\n这些音效不会进包，别人导入后需要自己放。${hint}` });
             toast(`已导出「${ST.active[w] || '默认'}」：条目 ${r.entries} 条，音效 ${r.copied} 个，`
                   + `**${r.missing} 个音效文件缺失**。\n这个包不含缺失的音效，别人导入后需要自己放音效。\n${r.zip}`, 'err');
           } else {
