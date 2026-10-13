@@ -2179,6 +2179,7 @@ async function refresh() {
   const s = await Backend.call('state', {});
   ST.version = s.version;
   { const dw = document.getElementById('dllWarn'); if (dw) dw.hidden = !s.dllStale; }   // 插件 DLL 旧了就在状态栏警告（不依赖游戏/联网）
+  const aw = document.getElementById('admWarn'); if (aw) aw.hidden = !s.elevated;   // 管理员运行时提示
   // ★ 浮窗页面（index.html#overlay）：只显示捕获面板，其余全隐藏（见 CSS .overlay-mode）
   if (location.hash === '#overlay') document.documentElement.classList.add('overlay-mode');   // 与 head 里的同步标记一致
   ST.themes = s.themes || [];

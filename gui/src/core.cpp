@@ -580,14 +580,37 @@ bool FindGameDirFromSelf(std::string& out) {
     }
     return false;
 }
+// 转成扩展长度路径（\\?\ 前缀）：绕过 MAX_PATH(260) 限制。
+//   组合名 + 文件名常常很长（中文名更占位），超过 260 时 CreateDirectoryW / CopyFileW /
+//   MoveFileExW 都会直接失败 —— 这正是"导出 0 个音效、缺失一堆（错误码 3）"的原因。
+// 是否以管理员身份运行：管理员下 %TEMP% 变成管理员账户目录（更长），
+//   导出路径更容易超过 MAX_PATH，历史上导致"音效全部导出失败（错误码 3）"。
+bool IsRunningElevated() {
+    HANDLE tok = nullptr;
+    if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &tok)) return false;
+    TOKEN_ELEVATION te{};
+    DWORD cb = sizeof(te);
+    const BOOL ok = ::GetTokenInformation(tok, TokenElevation, &te, sizeof(te), &cb);
+    ::CloseHandle(tok);
+    return ok && te.TokenIsElevated != 0;
+}
 
-// 递归创建多级目录（已存在的忽略）
+std::wstring ExtendPath(const std::wstring& p) {
+    if (p.size() < 4) return p;
+    if (p.compare(0, 4, L"\\\\?\\") == 0) return p;
+    if (p.compare(0, 2, L"\\\\") == 0) return L"\\\\?\\UNC\\" + p.substr(2);   // UNC
+    if ((p[0] >= L'A' && p[0] <= L'Z') || (p[0] >= L'a' && p[0] <= L'z')) return L"\\\\?\\" + p;
+    return p;
+}
+
+// 递归创建多级目录（已存在的忽略）。★ 必须用扩展长度路径，
+//   否则长路径下目录建不出来，随后复制就会报错误码 3（找不到路径）。
 void MakeDirs(const std::wstring& dir) {
     if (dir.empty()) return;
     std::wstring cur;
     for (const wchar_t* p = dir.c_str(); *p; ++p) {
         cur += *p;
-        if (*p == L'\\' || *(p + 1) == L'\0') ::CreateDirectoryW(cur.c_str(), nullptr);
+        if (*p == L'\\' || *(p + 1) == L'\0') ::CreateDirectoryW(ExtendPath(cur).c_str(), nullptr);
     }
 }
 
@@ -620,19 +643,6 @@ bool WriteWideFile(const std::wstring& path, const void* data, std::size_t n) {
 }
 
 
-// 原子复制：先写 .tmp，校验大小后再改名到位。
-// ★ 直接 CopyFileW 的隐患：源文件正被编辑器写入时会留下**半截目标文件**，
-//   用户看到的就是"音效文件损坏、还得重新添加"（实测反馈）。
-// 转成扩展长度路径（\\?\ 前缀）：绕过 MAX_PATH(260) 限制。
-//   组合名 + 文件名常常很长（中文名更占位），超过 260 时 CopyFileW/MoveFileExW 会直接失败，
-//   而源文件明明存在 —— 这正是"导出 0 个音效、缺失一堆"的常见原因。
-std::wstring ExtendPath(const std::wstring& p) {
-    if (p.size() < 4) return p;
-    if (p.compare(0, 4, L"\\\\?\\") == 0) return p;
-    if (p.compare(0, 2, L"\\\\") == 0) return L"\\\\?\\UNC\\" + p.substr(2);   // UNC
-    if ((p[0] >= L'A' && p[0] <= L'Z') || (p[0] >= L'a' && p[0] <= L'z')) return L"\\\\?\\" + p;
-    return p;
-}
 
 // 原子复制。失败时把原因写进 why（给用户看具体卡在哪一步）。
 bool CopyFileAtomicWhy(const std::wstring& src, const std::wstring& dst, std::wstring* why) {
@@ -3330,6 +3340,16 @@ bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::s
 
                 const std::size_t dd = outSub.find_last_of(L'\\');
                 if (dd != std::wstring::npos) MakeDirs(outDir + outSub.substr(0, dd + 1));
+                // ★ 目录必须真的建出来：长路径下若创建失败，复制会报"错误码 3（找不到路径）"
+                {
+                    const std::wstring dirW = outDir + outSub.substr(0, dd + 1);
+                    if (::GetFileAttributesW(ExtendPath(dirW).c_str()) == INVALID_FILE_ATTRIBUTES) {
+                        ++missing;
+                        if (missingSample && missingSample->size() < 8)
+                            missingSample->push_back(sp.path + "  ←  无法创建目标目录：" + Utf8FromWide(dirW));
+                        continue;
+                    }
+                }
                 std::wstring why;
                 if (CopyFileAtomicWhy(src, outDir + outSub, &why)) ++copied;
                 else {
@@ -3554,6 +3574,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
         if (method == "state") {
             JVal d = JVal::obj();
             d.set("dllStale", JVal(im->DllStaleCached()));   // ★ 插件 DLL 比 exe 旧 = 上次更新被游戏占用没换成（本地判定，不依赖联网）
+        d.set("elevated", JVal(IsRunningElevated()));   // 以管理员运行时提示用户（可能影响导出路径）
             d.set("version", JVal(std::string(kWseGuiVersion)));
             d.set("exeDir", JVal(ToSlash(im->exeDir)));
             d.set("dataDir", JVal(ToSlash(im->BaseDir())));
