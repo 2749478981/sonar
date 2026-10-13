@@ -56,7 +56,7 @@ void ParseSpec(const std::string& token, SoundSpec& sp) {
         sp.delay = parts[1].empty() ? 0 : std::atoi(parts[1].c_str());
         if (sp.delay < 0) sp.delay = 0;
         int v = parts[2].empty() ? 100 : std::atoi(parts[2].c_str());
-        sp.vol = v < 0 ? 0 : (v > 100 ? 100 : v);
+        sp.vol = v < 0 ? 0 : (v > 200 ? 200 : v);   // 单条音效音量 0..200
         // 第 4 段是标志位：可组合 F(固定) / C<ms>(自身冷却) / P(播放中不重复)
         std::string fl = ToLower(parts[3]);
         sp.fixed = fl.find('f') != std::string::npos;
@@ -75,7 +75,7 @@ void ParseSpec(const std::string& token, SoundSpec& sp) {
         sp.delay = parts[1].empty() ? 0 : std::atoi(parts[1].c_str());
         if (sp.delay < 0) sp.delay = 0;
         int v = parts[2].empty() ? 100 : std::atoi(parts[2].c_str());
-        sp.vol = v < 0 ? 0 : (v > 100 ? 100 : v);
+        sp.vol = v < 0 ? 0 : (v > 200 ? 200 : v);   // 单条音效音量 0..200
     } else if (parts.size() == 2) {
         sp.delay = parts[1].empty() ? 0 : std::atoi(parts[1].c_str());
         if (sp.delay < 0) sp.delay = 0;
@@ -182,7 +182,7 @@ bool LoadConfig(const std::string& path, Config& cfg) {
         for (size_t i = 0; i < plainOrder.size(); ++i) {
             SoundSpec& sp = plainOrder[i].first->specs[plainOrder[i].second];
             if (i < rawDelay.size() && rawDelay[i] > 0) sp.delay = rawDelay[i];
-            if (i < rawVol.size()) sp.vol = ClampInt(rawVol[i], 0, 100);
+            if (i < rawVol.size()) sp.vol = ClampInt(rawVol[i], 0, 200);   // 0..200
         }
         cur.combo = (inCombo && curComboW >= 0) ? curComboName : "";
         // 修复历史保存 bug：默认组合的条目以前没写 [WeaponW] 段头，会掉进上一个
@@ -499,7 +499,7 @@ bool SaveConfig(const std::string& path, const Config& cfg) {
     o += ";                        时整招只响一次，刃色以首个触发瞬间为准。\r\n";
     o += ";    Sound=               默认音效；Sound:none/white/yellow/red= 太刀无刃时/白刃时/\r\n";
     o += ";                        黄刃时/红刃时 的音效（未配的刃时回退默认音效）。\r\n";
-    o += ";    音效写法 path|延时ms|音量0..100|F ，末尾 F = 固定音效：命中时恒播，\r\n";
+    o += ";    音效写法 path|延时ms|音量0..200|F ，末尾 F = 固定音效：命中时恒播，\r\n";
     o += ";                        同池其余未固定音效仍随机抽一条同时播放。\r\n";
     o += ";  每武器配置组合：默认组合的条目写在 [WeaponW] 段里；命名组合写在\r\n";
     o += ";    [WeaponW:组合名] 段里；[Active] 段 W<type>=组合名 决定每武器当前用哪个组合。\r\n";

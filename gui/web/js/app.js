@@ -1211,7 +1211,7 @@ function soundCard(sp, onRemove, onChange) {
   };
 
   wrap.appendChild(mk('延时', () => sp.delay, v => sp.delay = v, 0, 5000, 'ms', 110));
-  wrap.appendChild(mk('音量', () => sp.vol, v => sp.vol = v, 0, 100, '', 80));
+  wrap.appendChild(mk('音量', () => sp.vol, v => sp.vol = v, 0, 200, '', 80));   // 0..200：>100 为放大（插件内做削波保护）
   wrap.appendChild(mk('冷却', () => sp.cdMs, v => sp.cdMs = v, 0, 60000, 'ms', 80));
 
   const fixedCb = h('input', { type: 'checkbox', checked: !!sp.fixed });

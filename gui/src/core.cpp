@@ -878,10 +878,13 @@ DWORD WINAPI PvWorker(LPVOID param) {
     wseaudio::Pcm pcm;
     if (!wseaudio::DecodeFileBytes(raw.data(), raw.size(), pcm) || pcm.samples.empty()) return 0;
 
-    float g = ctx->gain < 0.0f ? 0.0f : (ctx->gain > 1.0f ? 1.0f : ctx->gain);
-    if (g < 1.0f)
-        for (std::size_t i = 0; i < pcm.samples.size(); ++i)
-            pcm.samples[i] = (std::int16_t)(pcm.samples[i] * g);
+    // 增益上限 2.0（单条音效可到 200%）；放大时做削波保护，避免绕回爆音
+    float g = ctx->gain < 0.0f ? 0.0f : (ctx->gain > 2.0f ? 2.0f : ctx->gain);
+    if (g != 1.0f)
+        for (std::size_t i = 0; i < pcm.samples.size(); ++i) {
+            const float v = pcm.samples[i] * g;
+            pcm.samples[i] = (std::int16_t)(v > 32767.0f ? 32767.0f : (v < -32768.0f ? -32768.0f : v));
+        }
 
     WAVEFORMATEX wfx{};
     wfx.wFormatTag = WAVE_FORMAT_PCM;
@@ -1075,7 +1078,7 @@ SoundSpec SpecFromJson(const JVal& v) {
     if (s.delay < 0) s.delay = 0;
     s.vol = v.optInt("vol", 100);
     if (s.vol < 0) s.vol = 0;
-    if (s.vol > 100) s.vol = 100;
+    if (s.vol > 200) s.vol = 200;   // 单条音效音量上限 200
     s.fixed = v.optBool("fixed", false);
     s.cdMs = v.optInt("cdMs", 0);
     if (s.cdMs < 0) s.cdMs = 0;
@@ -4314,9 +4317,10 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             const int delay = p.optInt("delay", 0);
             const std::wstring full = ResolveSoundPath(corePtr, rel);
             // 增益 = 主音量 × 该音效倍率（和游戏内播放的算法一致，试听才是"所见即所得"）
-            float gain = (im->cfg.global.volume / 100.0f) * ((vol < 0 ? 0 : (vol > 100 ? 100 : vol)) / 100.0f);
+            // 单条音效音量 0..200：试听要和游戏内一致，所以这里也允许放大到 2.0
+            float gain = (im->cfg.global.volume / 100.0f) * ((vol < 0 ? 0 : (vol > 200 ? 200 : vol)) / 100.0f);
             if (gain < 0.0f) gain = 0.0f;
-            if (gain > 1.0f) gain = 1.0f;
+            if (gain > 2.0f) gain = 2.0f;
             PlayPreviewFile(full, gain, delay > 0 ? (unsigned)delay : 0);
             JVal d = JVal::obj();
             d.set("playing", JVal(true));

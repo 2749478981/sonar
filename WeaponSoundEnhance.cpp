@@ -680,9 +680,12 @@ struct Engine
         const std::size_t n = w.data.size() / 2;
         ctx->samples.resize(n);
         const std::int16_t* src = reinterpret_cast<const std::int16_t*>(w.data.data());
-        float gain = volume < 0.0f ? 0.0f : (volume > 1.0f ? 1.0f : volume);
-        for (std::size_t i = 0; i < n; ++i)
-            ctx->samples[i] = (std::int16_t)(src[i] * gain);
+        // ★ 单条音效音量可到 200%：增益上限 2.0，并做削波保护（超过 int16 会绕回爆音）
+        float gain = volume < 0.0f ? 0.0f : (volume > 2.0f ? 2.0f : volume);
+        for (std::size_t i = 0; i < n; ++i) {
+            const float s = src[i] * gain;
+            ctx->samples[i] = (std::int16_t)(s > 32767.0f ? 32767.0f : (s < -32768.0f ? -32768.0f : s));
+        }
         ctx->channels = w.channels;
         ctx->rate = w.sampleRate;
         ctx->bits = w.bitsPer;
@@ -1576,7 +1579,7 @@ void ParseSoundSpec(const std::string& token, SoundSpec& sp)
         if (sp.delay < 0) sp.delay = 0;
         if (sp.delay > 5000) sp.delay = 5000;
         int v = parts[2].empty() ? 100 : std::atoi(parts[2].c_str());
-        sp.vol = v < 0 ? 0 : (v > 100 ? 100 : v);
+        sp.vol = v < 0 ? 0 : (v > 200 ? 200 : v);   // 单条音效音量 0..200
         std::string flags = ToLower(parts[3]);
         sp.fixed = flags.find('f') != std::string::npos;
         sp.playLock = flags.find('p') != std::string::npos;
@@ -1598,7 +1601,7 @@ void ParseSoundSpec(const std::string& token, SoundSpec& sp)
         if (sp.delay < 0) sp.delay = 0;
         if (sp.delay > 5000) sp.delay = 5000;
         int v = parts[2].empty() ? 100 : std::atoi(parts[2].c_str());
-        sp.vol = v < 0 ? 0 : (v > 100 ? 100 : v);
+        sp.vol = v < 0 ? 0 : (v > 200 ? 200 : v);   // 单条音效音量 0..200
     } else if (parts.size() == 2) {
         sp.plain = false;
         sp.delay = parts[1].empty() ? 0 : std::atoi(parts[1].c_str());
@@ -1871,7 +1874,7 @@ void LoadConfig()
         for (std::size_t i = 0; i < plainOrder.size(); ++i) {
             SoundSpec& sp = plainOrder[i].first->specs[plainOrder[i].second];
             if (i < rawDelay.size() && rawDelay[i] > 0) sp.delay = rawDelay[i];
-            if (i < rawVol.size()) sp.vol = ClampInt(rawVol[i], 0, 100);
+            if (i < rawVol.size()) sp.vol = ClampInt(rawVol[i], 0, 200);   // 0..200
         }
         // 旧版本 GUI 保存默认组合的条目时没写 [WeaponW] 段头，条目会掉进上一个命名
         // 组合的段里（长枪条目变成"武器3的组合DIO"）。段里的组合武器和条目自己的
