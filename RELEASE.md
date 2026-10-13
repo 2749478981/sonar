@@ -1,6 +1,6 @@
 # Sonar 更新说明
 
-> 只保留**最近 10 个版本**，每条一句话。更早版本的说明见
+> 只保留**最近 10 个版本**，每条一句话。更早版本的说明见  
 > [GitHub Releases](https://github.com/2749478981/sonar/releases)。
 
 # Sonar v2.38.5

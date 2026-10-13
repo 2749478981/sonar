@@ -623,23 +623,65 @@ bool WriteWideFile(const std::wstring& path, const void* data, std::size_t n) {
 // 原子复制：先写 .tmp，校验大小后再改名到位。
 // ★ 直接 CopyFileW 的隐患：源文件正被编辑器写入时会留下**半截目标文件**，
 //   用户看到的就是"音效文件损坏、还得重新添加"（实测反馈）。
-bool CopyFileAtomic(const std::wstring& src, const std::wstring& dst) {
+// 转成扩展长度路径（\\?\ 前缀）：绕过 MAX_PATH(260) 限制。
+//   组合名 + 文件名常常很长（中文名更占位），超过 260 时 CopyFileW/MoveFileExW 会直接失败，
+//   而源文件明明存在 —— 这正是"导出 0 个音效、缺失一堆"的常见原因。
+std::wstring ExtendPath(const std::wstring& p) {
+    if (p.size() < 4) return p;
+    if (p.compare(0, 4, L"\\\\?\\") == 0) return p;
+    if (p.compare(0, 2, L"\\\\") == 0) return L"\\\\?\\UNC\\" + p.substr(2);   // UNC
+    if ((p[0] >= L'A' && p[0] <= L'Z') || (p[0] >= L'a' && p[0] <= L'z')) return L"\\\\?\\" + p;
+    return p;
+}
+
+// 原子复制。失败时把原因写进 why（给用户看具体卡在哪一步）。
+bool CopyFileAtomicWhy(const std::wstring& src, const std::wstring& dst, std::wstring* why) {
+    const std::wstring esrc = ExtendPath(src), edst = ExtendPath(dst);
     WIN32_FILE_ATTRIBUTE_DATA fad{};
-    if (!::GetFileAttributesExW(src.c_str(), GetFileExInfoStandard, &fad)) return false;
+    if (!::GetFileAttributesExW(esrc.c_str(), GetFileExInfoStandard, &fad)) {
+        if (why) *why = L"源文件读不到（可能被占用/权限）";
+        return false;
+    }
+    if (fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        if (why) *why = L"这是个文件夹，不是音效文件";
+        return false;
+    }
     const unsigned long long srcSize = ((unsigned long long)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
-    if (srcSize == 0) return false;
-    const std::wstring tmp = dst + L".tmp";
+    if (srcSize == 0) {
+        if (why) *why = L"文件是空的（0 字节）";
+        return false;
+    }
+    const std::wstring tmp = edst + L".tmp";
     ::DeleteFileW(tmp.c_str());
-    if (!::CopyFileW(src.c_str(), tmp.c_str(), FALSE)) { ::DeleteFileW(tmp.c_str()); return false; }
-    WIN32_FILE_ATTRIBUTE_DATA t2{};
-    if (!::GetFileAttributesExW(tmp.c_str(), GetFileExInfoStandard, &t2)) { ::DeleteFileW(tmp.c_str()); return false; }
-    const unsigned long long tmpSize = ((unsigned long long)t2.nFileSizeHigh << 32) | t2.nFileSizeLow;
-    if (tmpSize != srcSize) { ::DeleteFileW(tmp.c_str()); return false; }   // 大小不符：源正在被写，放弃
-    if (!::MoveFileExW(tmp.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    if (!::CopyFileW(esrc.c_str(), tmp.c_str(), FALSE)) {
+        const DWORD e = ::GetLastError();
         ::DeleteFileW(tmp.c_str());
+        if (why) *why = L"复制失败（错误码 " + std::to_wstring(e) + L"；常见：目标路径过长/被占用/无权限）";
+        return false;
+    }
+    WIN32_FILE_ATTRIBUTE_DATA t2{};
+    if (!::GetFileAttributesExW(tmp.c_str(), GetFileExInfoStandard, &t2)) {
+        ::DeleteFileW(tmp.c_str());
+        if (why) *why = L"写入后读不到临时文件";
+        return false;
+    }
+    const unsigned long long tmpSize = ((unsigned long long)t2.nFileSizeHigh << 32) | t2.nFileSizeLow;
+    if (tmpSize != srcSize) {
+        ::DeleteFileW(tmp.c_str());
+        if (why) *why = L"源文件正在被写入（大小不一致）";
+        return false;
+    }
+    if (!::MoveFileExW(tmp.c_str(), edst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        const DWORD e = ::GetLastError();
+        ::DeleteFileW(tmp.c_str());
+        if (why) *why = L"改名失败（错误码 " + std::to_wstring(e) + L"；目标可能被占用）";
         return false;
     }
     return true;
+}
+
+bool CopyFileAtomic(const std::wstring& src, const std::wstring& dst) {
+    return CopyFileAtomicWhy(src, dst, nullptr);
 }
 
 bool ReadWideFile(const std::wstring& path, std::string& out) {
@@ -1258,7 +1300,10 @@ std::string TimeNowHms() {
 std::string TempSubDir(const char* tag) {
     char t[MAX_PATH] = {};
     ::GetTempPathA(MAX_PATH, t);
-    return std::string(t) + tag + "_" +
+    // ★ 目录名尽量短：导出路径 = 这里 + sounds\<组合名>\<文件名>，
+    //   组合名/文件名一长就逼近 MAX_PATH(260)，普通 CopyFileW 会直接失败（对端机器没开长路径时）。
+    (void)tag;
+    return std::string(t) + "wse" + std::to_string((unsigned long)::GetCurrentProcessId()) + "\\";
            std::to_string((unsigned long)::GetCurrentProcessId()) + "\\";
 }
 
@@ -3260,7 +3305,7 @@ bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::s
                 // ★ 统一归类：sounds\<组合名>\<文件名>（用户明确要求；导入端也是按组合归类）
                 //   以前是"保留原子目录 / 压平到 sounds 根"，同一个包里目录结构不统一。
                 std::wstring base = src.substr(src.find_last_of(L"\\/") + 1);
-                if (base.empty()) { ++missing; continue; }
+                if (base.empty()) { ++missing; if (missingSample && missingSample->size() < 8) missingSample->push_back(sp.path + "  ←  路径没有文件名"); continue; }
                 std::wstring baseKey = base;
                 for (std::size_t k = 0; k < baseKey.size(); ++k)
                     if (baseKey[k] >= L'A' && baseKey[k] <= L'Z') baseKey[k] = (wchar_t)(baseKey[k] + 32);
@@ -3285,8 +3330,13 @@ bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::s
 
                 const std::size_t dd = outSub.find_last_of(L'\\');
                 if (dd != std::wstring::npos) MakeDirs(outDir + outSub.substr(0, dd + 1));
-                if (CopyFileAtomic(src, outDir + outSub)) ++copied;
-                else ++missing;
+                std::wstring why;
+                if (CopyFileAtomicWhy(src, outDir + outSub, &why)) ++copied;
+                else {
+                    ++missing;
+                    if (missingSample && missingSample->size() < 8)
+                        missingSample->push_back(sp.path + "  ←  " + Utf8FromWide(why));
+                }
                 srcToRel[key] = newRel;
                 sp.path = newRel;
             }
