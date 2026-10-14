@@ -1849,7 +1849,18 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
         _snprintf_s(want, _TRUNCATE, "%lu", (unsigned long)size);
         {
             std::string have;
-            if (FsRead(marker, have) && have == want) return;   // 已是最新，跳过
+            // ★ 版本标记只说明"曾经释放过"：文件可能被安全软件/清理工具删掉，
+            //   那样左上角 logo 与武器图标就会空白且永远不恢复 —— 所以还要抽查关键文件在不在。
+            bool upToDate = FsRead(marker, have) && have == want;
+            if (upToDate) {
+                const std::string probe1 = assetsDir + "\\sonar_icon.png";
+                const std::string probe2 = assetsDir + "\\weapons_icons";
+                if (::GetFileAttributesW(Utf8ToWide(probe1).c_str()) == INVALID_FILE_ATTRIBUTES ||
+                    ::GetFileAttributesW(Utf8ToWide(probe2).c_str()) == INVALID_FILE_ATTRIBUTES) {
+                    upToDate = false;   // 文件丢了 → 重新释放
+                }
+            }
+            if (upToDate) return;   // 已是最新且文件齐全，跳过
         }
         MakeDirs(Utf8ToWide(assetsDir));
 
