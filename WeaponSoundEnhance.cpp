@@ -321,6 +321,7 @@ void Refresh()
             if (v >= 0 && v <= 3) gCharge = v;
         }
     }
+    // 蓄力段数变化由 worker 循环打日志（那里 LogD 在作用域内；此处只负责读值）
 
     // ---- 被盯怪物的血量：命中判定的备用信号 ----
     // 0x12958 是"武器最近命中的怪"，命中过就一直保留（粘滞），所以它只用来
@@ -3153,6 +3154,7 @@ DWORD WINAPI WorkerProc(LPVOID)
     std::mt19937 rng(static_cast<unsigned>(::GetTickCount64() ^ 0x9E3779B9u));
     std::uint64_t lastHeartbeat = 0;
     bool firstState = true;
+    int chargeSeen = -1;      // 上一帧的蓄力段（打 [charge] 日志用）
 
     while (::InterlockedCompareExchange(&gStop, 0, 0) == 0) {
         ::Sleep(static_cast<DWORD>(gPollMs));
@@ -3164,6 +3166,16 @@ DWORD WINAPI WorkerProc(LPVOID)
         const int weapon = player::gWeapon;
         const int gauge = player::gGauge;
 
+
+        // ★ 蓄力段数变化 → 打一行当时的 fsm/lmt/fsmTarget。
+        //   配"按派生做蓄力差分"的条目时靠它拿到**蓄力中**的准确 ID
+        //   （蓄力斩 65/74/137 是蓄力结束后的斩击，不能当蓄力判定）。
+        if (player::gCharge != chargeSeen) {
+            if (player::gCharge >= 0 || chargeSeen >= 0)
+                LogD("[charge] lvl %d -> %d   fsm=%d fsmTarget=%d lmt=%d weapon=%d",
+                     chargeSeen, player::gCharge, fsm, player::gFsmTarget, lmt, weapon);
+            chargeSeen = player::gCharge;
+        }
         // -------------------------------------------------------------------
         //  监听位 0：派生 ID 流
         //  只在 FSM / FSM层 / LMT / 武器 与上一帧不同时打一行，避免刷屏。
@@ -3307,7 +3319,7 @@ DWORD WINAPI WorkerProc(LPVOID)
                     if (!matchBase) { e.chargeLatched = false; continue; }
                     const int cc = player::gCharge;   // 0..3，-1=读不到
                     if (cc < e.chargeLevel) { e.chargeLatched = false; continue; }  // 还没蓄到/已归零 → 解锁
-                    if (cc == e.chargeLevel && !e.chargeLatched) {
+                    if (cc >= e.chargeLevel && !e.chargeLatched) {
                         e.chargeLatched = true;
                         if (nowMs - e.lastTriggerMs >= (std::uint64_t)gDebounceMs) {
                             if (FireEntry(e, gauge, rng, nowMs, tag)) e.lastTriggerMs = nowMs;

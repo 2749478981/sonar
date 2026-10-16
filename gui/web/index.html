@@ -93,7 +93,6 @@
         <label class="inline" title="只列出当前激活组合的条目；关掉则列出全部，非激活的会打标记">
           <input type="checkbox" id="onlyActive"><span class="lbltxt">只看激活组合</span></label>
         <button class="primary" data-act="entry.add">＋ 新增条目</button>
-          <button data-act="entry.addCharge" title="新建一条「蓄力条目」：选一个蓄力段，蓄力涨到该段的瞬间立即播放（大剑/大锤/弓箭）">＋ 蓄力条目</button>
         <button data-act="entry.lint" title="检查当前武器条目里容易踩的坑：重复触发条件、没有音效、音效文件不存在、匹配任意动作">检查配置</button>
         <button data-act="entry.merge" title="把触发条件完全相同的条目合并成一条（音效池取并集），整理重复/多余的配置">合并同条件</button>
         <div class="viewswitch list inline-switch">
@@ -249,9 +248,13 @@
     </div>
     <div class="field hint" id="edChargeHint" hidden>
       这条是<b>蓄力条目</b>：蓄力涨到该段的<b>那一瞬间</b>立即播放（不是动作打完才播）。
-      蓄力归零/换动作会重新计。<br>
-      想分「普通/强/真蓄力」：填对应的 <b>FSMId</b>（普通 65 · 强 74 · 真 137）；
-      想再细到某个过渡/派生阶段：填 <b>LMT</b>。都不填 = 任意招式蓄到该段都响。
+      蓄力归零/换动作会重新计，所以同一段能反复响。<br>
+      <b>想按"怎么进入蓄力"做差分</b>（不同派生 → 不同蓄力音效），填 <b>FSMId / LMT</b>，
+      但要填<b>蓄力中</b>的 ID —— 不是蓄力斩的 65/74/137（那是蓄力<b>结束后</b>的斩击，填了不会响）。<br>
+      <b>怎么找到蓄力中的 ID</b>：进游戏用几种不同方式起手蓄力，然后看
+      <code>plugins\WeaponSoundEnhance.log</code>（Debug=1）里的
+      <code>[charge] lvl=… fsm=… lmt=…</code> 行 —— 每行就是"蓄到这一段时当时的状态"。
+      建议先只填 <b>ChargeLevel</b> 跑通，再逐步加 FSM/LMT 细分。
     </div>
 
     <div class="sect">
