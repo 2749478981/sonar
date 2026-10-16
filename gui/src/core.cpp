@@ -3964,6 +3964,11 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                                 std::to_string((long long)e.media) + "|";
                 if (e.lmt.empty()) k += "any";
                 else { for (std::size_t i = 0; i < e.lmt.size(); ++i) { if (i) k += ","; k += std::to_string(e.lmt[i]); } }
+                // ★ 蓄力条目必须按「蓄力段 + 是否被打断」分开：LMT 都是"不限"时，
+                //   1/2/3 段若不进键，合并会把它们并成一条、检查又会误报"重复条件"。
+                k += "|c" + std::to_string(e.chargeLevel) + (e.chargeCut ? "x" : "-");
+                // Stop 与普通条目语义不同；Group 不同则"整招只响一次"的范围也不同，都不能并
+                k += std::string("|s") + (e.stop ? "1" : "0") + "|g" + e.group;
                 return k;
             };
             auto addPool = [](PoolSpec& dst, const PoolSpec& src) {
@@ -4024,6 +4029,11 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                                 std::to_string((long long)e.media) + "|";
                 if (e.lmt.empty()) k += "any";
                 else { for (std::size_t i = 0; i < e.lmt.size(); ++i) { if (i) k += ","; k += std::to_string(e.lmt[i]); } }
+                // ★ 蓄力条目必须按「蓄力段 + 是否被打断」分开：LMT 都是"不限"时，
+                //   1/2/3 段若不进键，合并会把它们并成一条、检查又会误报"重复条件"。
+                k += "|c" + std::to_string(e.chargeLevel) + (e.chargeCut ? "x" : "-");
+                // Stop 与普通条目语义不同；Group 不同则"整招只响一次"的范围也不同，都不能并
+                k += std::string("|s") + (e.stop ? "1" : "0") + "|g" + e.group;
                 return k;
             };
             for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
