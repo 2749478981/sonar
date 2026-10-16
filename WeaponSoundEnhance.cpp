@@ -1208,6 +1208,7 @@ struct Attack
     //   仍然受 Weapon/FSM/LMT 过滤，所以能用派生进度（哪一招、哪个过渡）再细分。
     //   0 = 不是蓄力条目（普通条目，行为与旧版一致）。
     int chargeLevel = 0;
+    bool chargeCut = false;       // ChargeCut=1：本段响时，先把上一段（正在播）的蓄力音效停掉
     bool chargeLatched = false;   // 本段是否已经在这次蓄力里响过（归零/降段时清）
     Pool defPool;                 // default pool (tag = "any")
     Pool gaugePool[4];            // LS gauge pools, keyed by level 0..3
@@ -2158,6 +2159,8 @@ void LoadConfig()
         } else if (key == "ChargeLevel") {
             const int cl = std::atoi(val.c_str());   // 0=不是蓄力条目；1..3=负责第 N 段
             cur.chargeLevel = (cl >= 1 && cl <= 3) ? cl : 0;
+        } else if (key == "ChargeCut") {
+            cur.chargeCut = std::atoi(val.c_str()) != 0;
         } else if (key == "CheckDelayMs") {
             cur.checkDelayMs = std::atoi(val.c_str());
         } else if (key == "CheckTimeoutMs") {
@@ -3320,6 +3323,7 @@ DWORD WINAPI WorkerProc(LPVOID)
                     const int cc = player::gCharge;   // 0..3，-1=读不到
                     if (cc < e.chargeLevel) { e.chargeLatched = false; continue; }  // 还没蓄到/已归零 → 解锁
                     if (cc >= e.chargeLevel && !e.chargeLatched) {
+                        if (e.chargeCut) audio::StopAll();   // 被下一段蓄力打断：先停上一段
                         e.chargeLatched = true;
                         if (nowMs - e.lastTriggerMs >= (std::uint64_t)gDebounceMs) {
                             if (FireEntry(e, gauge, rng, nowMs, tag)) e.lastTriggerMs = nowMs;

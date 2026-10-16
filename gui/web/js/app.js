@@ -802,7 +802,7 @@ async function captureToEntry(r) {
     combo: w >= 0 ? (ST.active[w] || '') : '',
     fsmId: fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -849,7 +849,7 @@ async function addWemRecord(r) {
     name: wemSeq(r) || wemBank(r) || ('media ' + media), weaponType: w, combo,
     media: media, bank: r.bank || '', fsmId: -1, fsmTarget: -1, group: '', stop: false,
     lmt: [], lmtAny: false,   // 不限不勾选：wem 条目可以填 LMT 作为附加条件
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -952,7 +952,7 @@ const JUDGE_FALLBACK = [
 function blankEntry() {
   return { name: '', weaponType: ST.weaponFilter >= 0 ? ST.weaponFilter : -1, combo: '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [] };
 }
@@ -1011,20 +1011,52 @@ function fillEditor() {
   $('#edFsmTarget').value = e.fsmTarget;
   $('#edStop').checked = !!e.stop;
 
-  // 蓄力等级（目前只对大剑开放：只有它的蓄力等级偏移是已知的 +0x2358；
-  // 弓/锤的偏移待实测后再放开。它不是高级设置，而是一种条目类型）
+  // 蓄力等级 / 蓄力派生 / 被下一段蓄力打断
+  // （目前只对大剑开放：只有它的蓄力等级偏移已知 +0x2358；弓/锤待实测后再放开。
+  //   它不属于"高级设置"，而是一种条目类型。）
   {
-    const chargeRow = $('#edChargeRow'), chargeHint = $('#edChargeHint'), chargeSel = $('#edCharge');
+    const chargeRow = document.querySelector('#edChargeRow');
+    const chargeHint = document.querySelector('#edChargeHint');
+    const chargeSel = document.querySelector('#edCharge');
+    const derivRow = document.querySelector('#edChargeDerivRow');
+    const derivSel = document.querySelector('#edChargeDeriv');
+    const cutBox = document.querySelector('#edChargeCut');
     const isChargeWeapon = (e.weaponType === 0);
+    const showDeriv = () => { if (derivRow) derivRow.hidden = !isChargeWeapon || !(e.chargeLevel > 0); };
     if (chargeRow) chargeRow.hidden = !isChargeWeapon;
+    showDeriv();
     if (chargeHint) chargeHint.hidden = !isChargeWeapon;
     if (chargeSel) {
       chargeSel.value = String(e.chargeLevel || 0);
       chargeSel.onchange = () => {
         e.chargeLevel = parseInt(chargeSel.value, 10) || 0;
-        if (e.chargeLevel > 0 && e.fsmId < 0 && (!e.lmt || !e.lmt.length)) {
-          toast('已设为蓄力条目。想按派生细分就填 LMT/FSMId（先看日志里的 [charge] 行）', 'ok');
-        }
+        if (!(e.chargeLevel > 0)) { e.fsmId = -1; e.lmt = []; e.lmtAny = true; }   // 取消蓄力条目不残留派生
+        showDeriv();
+        if (e.chargeLevel > 0 && e.fsmId < 0 && (!e.lmt || !e.lmt.length))
+          toast('已设为蓄力条目。想按派生细分，用下面的「蓄力派生」选 A/B/C', 'ok');
+      };
+    }
+    if (cutBox) {
+      cutBox.checked = !!e.chargeCut;
+      cutBox.onchange = () => { e.chargeCut = cutBox.checked; };
+    }
+    if (derivSel) {
+      // 固定值：85/86/102 是实测到的蓄力过渡 FSM；选了必须 LMT 不限才匹配
+      const known = [85, 86, 102];
+      const cur = (e.chargeLevel > 0 && (!e.lmt || !e.lmt.length) && known.indexOf(e.fsmId) >= 0)
+        ? String(e.fsmId) : '';
+      derivSel.value = cur;
+      derivSel.onchange = () => {
+        const v = derivSel.value ? parseInt(derivSel.value, 10) : -1;
+        e.fsmId = v;
+        e.lmt = []; e.lmtAny = true;
+        const fi = document.querySelector('#edFsm');
+        const li = document.querySelector('#edLmt');
+        const la = document.querySelector('#edLmtAny');
+        if (fi) fi.value = v;
+        if (li) li.value = '';
+        if (la) la.checked = true;
+        lmtHint();
       };
     }
   }
@@ -1180,7 +1212,7 @@ function applyJudgePreset() {
   $('#edFinalMode').checked = e.checkMode === 1;
   fillConds();
   judgeNote();
-  toast(`已按预设填好 ${e.conds.length} 条条件：请给每条条件「浏览… 选音效」加上音效（没加音效的条件会被丢弃）`, 'ok');
+  toast(`已按预设填好 ${e.conds.length} 条条件：请给每条条件「选择音效 / 添加音效」加上音效（没加音效的条件会被丢弃）`, 'ok');
 }
 
 // 判定区提示：预设说明 + 场景提醒（伤害类条件需要任务/目标怪物）
@@ -1316,7 +1348,7 @@ function buildPools(box, e) {
           arr.push({ path: p, delay: 0, vol: 100, fixed: false, cdMs: 0, playLock: false });
       });
       fillPools();
-    } }, '浏览… 选音效');
+    } }, arr.length ? '添加音效' : '选择音效');
     wrap.appendChild(h('div', { class: 'addrow' }, browse));
   };
 
@@ -1371,7 +1403,7 @@ function fillConds() {
             c.pool.push({ path: p, delay: 0, vol: 100, fixed: false, cdMs: 0, playLock: false });
         });
         fillConds();
-      } }, '浏览… 选音效')));
+      } }, (c.pool && c.pool.length) ? '添加音效' : '选择音效')));
     cb.appendChild(cwrap);
     box.appendChild(cb);
   });
@@ -1392,7 +1424,7 @@ async function saveEditor() {
     const names = emptyConds.map(c => c.expr || '(空表达式)').join('、');
     const go = await confirmBox({
       title: '有条件的音效是空的', danger: true, okText: '仍然保存',
-      message: `这些条件还没有加音效：${names}\n保存后它们会被丢弃（判定窗口也会跟着失效）。\n给条件加音效：展开「判定时间与条件」→ 条件下面点「浏览… 选音效」。`,
+      message: `这些条件还没有加音效：${names}\n保存后它们会被丢弃（判定窗口也会跟着失效）。\n给条件加音效：展开「判定时间与条件」→ 条件下面点「选择音效 / 添加音效」。`,
     });
     if (!go) return;
   }
@@ -1468,7 +1500,7 @@ async function addFsmToCombo(row) {
     name: row.name || ('fsm ' + row.fsm), weaponType: row.weapon, combo,
     fsmId: row.fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -1653,8 +1685,15 @@ const ACTIONS = {
     await refresh();
     toast(r.added ? `已合并 ${r.added} 条` : '没有可合并的新条目', 'ok');
   },
-  'game.reload': async () => { await Backend.call('game.reload', {});
-    toast('已请求游戏重载配置（改完要先保存）', 'ok'); },
+  // ★ 重载 = 先自动保存再生效。注意编辑器草稿也要先提交，
+  //   否则正在编辑的那条改动还没进 cfg，会被「自动保存」漏掉。
+  'game.reload': async () => {
+    if (ED.open && ED.draft) {
+      try { await saveEditor(); } catch (e) { /* 存不下也继续重载，别卡住 */ }
+    }
+    await Backend.call('game.reload', {});
+    toast('已自动保存配置并让游戏重载：游戏内立即生效（正在播的音效会被停掉）', 'ok');
+  },
   'game.stop':   async () => { await Backend.call('game.stop', {});
       toast('已停止：游戏内音效 + GUI 试听', 'ok'); },
   'game.launch': async () => {
