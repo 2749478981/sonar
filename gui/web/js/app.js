@@ -573,8 +573,13 @@ function renderTable() {
   // ★ 按"触发条件"分组：同一条件（武器+FSM+目标层+LMT）写了好几条时，
   //   用一个分组标题行把它们圈起来，并给组内行加底色 —— 用户一眼能看出"这几条是同一个条件"，
   //   避免重复/多余配置（实测用户会把同一条件写好几条，然后以为"有的条目不生效"）。
+  // ★ 蓄力条目不能按"同一触发条件"分组：它们的 LMT 都是"不限"，不加蓄力段就会被并成一组。
+  //   段数进键 + 标题写 蓄力/强蓄力/真蓄力，一眼能分清是哪一段。
+  const CHARGE_FSM_NAME = { 85: '蓄力', 86: '强蓄力', 102: '真蓄力' };
   const condKey = e => [e.weaponType, e.fsmId, e.fsmTarget,
-                         (e.lmtAny || !(e.lmt || []).length) ? 'any' : (e.lmt || []).join(',')].join('|');
+                         (e.lmtAny || !(e.lmt || []).length) ? 'any' : (e.lmt || []).join(','),
+                         'c' + (e.chargeLevel || 0), e.chargeCut ? 'x' : '-',
+                         e.stop ? 's1' : 's0', e.group || ''].join('|');
   const groups = [];
   const groupOf = {};
   view.forEach(item => {
@@ -584,10 +589,18 @@ function renderTable() {
   });
   groups.forEach(g => {
     if (g.items.length > 1) {
+      const e0 = g.items[0].e;
+      const isCharge = (e0.chargeLevel > 0);
+      const title = isCharge
+        ? `${CHARGE_FSM_NAME[e0.fsmId] || '蓄力'} · 第${e0.chargeLevel}段 · ${g.items.length} 条`
+        : `同一触发条件 · ${g.items.length} 条`;
+      const hint = isCharge
+        ? '（同一段蓄力时这几条都会响；想并成一条可点工具栏「合并同条件」）'
+        : '（同一动作会同时播放这几条；想合并成一条可点工具栏「合并同条件」）';
       tb.appendChild(h('tr', { class: 'grp' },
         h('td', { colspan: '6' },
-          h('span', { class: 'grptag', text: `同一触发条件 · ${g.items.length} 条` }),
-          h('span', { class: 'dim', text: '（同一动作会同时播放这几条；想合并成一条可点工具栏「合并同条件」）' }))));
+          h('span', { class: 'grptag', text: title }),
+          h('span', { class: 'dim', text: hint }))));
     }
     g.items.forEach(item => { renderEntryRow(tb, item, g.items.length > 1); });
   });

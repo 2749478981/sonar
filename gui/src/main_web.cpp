@@ -861,6 +861,28 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_SETFOCUS:
             if (g_ctrl) g_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
             return 0;
+        case WM_CLOSE: {
+            // ★ 退出前检查未保存的 ini：有改动就提醒，别让用户白配一场
+            bool dirty = false;
+            try {
+                const std::string st = g_core.Handle("state", "{}");
+                dirty = (st.find("\"dirty\":true") != std::string::npos);
+            } catch (...) {}
+            if (dirty) {
+                const int r = ::MessageBoxW(hwnd,
+                    L"配置还有未保存的改动。\n\n"
+                    L"「是」= 保存并退出\n"
+                    L"「否」= 不保存直接退出\n"
+                    L"「取消」= 返回（继续编辑）",
+                    L"Sonar 配置工具", MB_YESNOCANCEL | MB_ICONWARNING | MB_DEFBUTTON1);
+                if (r == IDCANCEL) return 0;            // 不退出
+                if (r == IDYES) {
+                    try { g_core.Handle("config.save", "{}"); } catch (...) {}
+                }
+            }
+            ::DestroyWindow(hwnd);
+            return 0;
+        }
         case WM_DESTROY:
             if (g_pollTimer) { ::KillTimer(hwnd, 1); g_pollTimer = 0; }
             ::KillTimer(hwnd, 4);

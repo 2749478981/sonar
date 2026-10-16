@@ -3986,6 +3986,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
                 const SoundEntry& e = im->cfg.entries[i];
                 if (e.weaponType != w || e.combo != combo) { out.push_back(e); continue; }
+                // ★ 蓄力条目不参与合并：它们按"蓄力段"分，本来就不是同条件的一条。
+                if (e.chargeLevel > 0) { out.push_back(e); continue; }
                 const std::string k = keyOf(e);
                 std::unordered_map<std::string, std::size_t>::iterator it = firstIdx.find(k);
                 if (it == firstIdx.end()) { firstIdx[k] = out.size(); out.push_back(e); continue; }
@@ -4039,6 +4041,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
                 const SoundEntry& e = im->cfg.entries[i];
                 if (w >= 0 && e.weaponType != w) continue;
+                if (e.chargeLevel > 0) continue;   // 蓄力条目按段分，不算"重复触发条件"
                 ++cnt[keyOf(e)];
             }
             int dupCond = 0, noSound = 0, missing = 0, matchAll = 0;
