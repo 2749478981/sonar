@@ -602,6 +602,8 @@ function renderTable() {
     },
       h('td', {}, h('span', { class: 'nm', title: displayName(e), text: displayName(e) }),
         isWem ? h('span', { class: 'badge wem', text: 'wem', style: 'margin-left:7px' }) : null,
+        (e.chargeLevel > 0) ? h('span', { class: 'badge charge', text: '蓄力' + e.chargeLevel + '段',
+          style: 'margin-left:7px', title: '蓄力条目：蓄力涨到第 ' + e.chargeLevel + ' 段的瞬间立即播放' }) : null,
         inCombo ? null : h('span', { class: 'badge warn', text: '未激活', style: 'margin-left:7px' })),
       h('td', {}, wInline(e.weaponType)),
       // WEM 视图：WEM id + 序号（nbnk 内第几个）；派生视图：LMT + FSMId
@@ -800,7 +802,7 @@ async function captureToEntry(r) {
     combo: w >= 0 ? (ST.active[w] || '') : '',
     fsmId: fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []],
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -847,7 +849,7 @@ async function addWemRecord(r) {
     name: wemSeq(r) || wemBank(r) || ('media ' + media), weaponType: w, combo,
     media: media, bank: r.bank || '', fsmId: -1, fsmTarget: -1, group: '', stop: false,
     lmt: [], lmtAny: false,   // 不限不勾选：wem 条目可以填 LMT 作为附加条件
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []],
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -950,7 +952,7 @@ const JUDGE_FALLBACK = [
 function blankEntry() {
   return { name: '', weaponType: ST.weaponFilter >= 0 ? ST.weaponFilter : -1, combo: '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []],
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [] };
 }
@@ -1009,13 +1011,40 @@ function fillEditor() {
   $('#edFsmTarget').value = e.fsmTarget;
   $('#edStop').checked = !!e.stop;
 
+  // 蓄力等级（只对大剑/大锤/弓箭显示；不是高级设置，是一种条目类型）
+  {
+    const chargeRow = $('#edChargeRow'), chargeHint = $('#edChargeHint'), chargeSel = $('#edCharge');
+    const isChargeWeapon = e.weaponType === 0 || e.weaponType === 4 || e.weaponType === 11;
+    if (chargeRow) chargeRow.hidden = !isChargeWeapon;
+    if (chargeHint) chargeHint.hidden = !isChargeWeapon;
+    if (chargeSel) {
+      chargeSel.value = String(e.chargeLevel || 0);
+      chargeSel.onchange = () => {
+        e.chargeLevel = parseInt(chargeSel.value, 10) || 0;
+        if (e.chargeLevel > 0 && e.fsmId < 0 && (!e.lmt || !e.lmt.length)) {
+          toast('已设为蓄力条目。建议再填 FSMId 以区分 普通/强/真 蓄力（见下方说明）', 'ok');
+        }
+      };
+    }
+  }
+
   // 武器下拉
   const ws = $('#edWeapon');
   ws.innerHTML = '';
   ws.appendChild(h('option', { value: '-1' }, '任意 (-1)'));
   ST.weapons.forEach(w => ws.appendChild(
     h('option', { value: String(w.id), selected: w.id === e.weaponType }, `${w.id} ${w.name}`)));
-  ws.onchange = () => { e.weaponType = parseInt(ws.value, 10); e.combo = ''; fillComboSelect(); fillPools(); };
+  ws.onchange = () => {
+    e.weaponType = parseInt(ws.value, 10); e.combo = '';
+    // 换武器后同步"蓄力等级"行的可用性；不是蓄力武器就清掉等级，避免留下无意义的 ChargeLevel
+    const isChargeWeapon = e.weaponType === 0 || e.weaponType === 4 || e.weaponType === 11;
+    if (!isChargeWeapon) e.chargeLevel = 0;
+    const cr = $('#edChargeRow'), ch = $('#edChargeHint'), cs = $('#edCharge');
+    if (cr) cr.hidden = !isChargeWeapon;
+    if (ch) ch.hidden = !isChargeWeapon;
+    if (cs && !isChargeWeapon) cs.value = '0';
+    fillComboSelect(); fillPools();
+  };
 
   // 判定下拉
   const js = $('#edJudge');
@@ -1298,13 +1327,6 @@ function buildPools(box, e) {
       pool(nm, e.gauge[i], 'g' + i, true);
     });
   }
-
-  if (hasCharge && ED.adv) {
-    box.appendChild(h('div', { class: 'sect' }, '蓄力等级音效（大剑/大锤/弓箭，蓄到该段的瞬间立即播放）'));
-    ['蓄力1段', '蓄力2段', '蓄力3段(满)'].forEach((nm, i) => {
-      pool(nm, e.charge[i + 1], 'c' + (i + 1), true);
-    });
-  }
 }
 
 /* ---- 判定条件 ---- */
@@ -1444,7 +1466,7 @@ async function addFsmToCombo(row) {
     name: row.name || ('fsm ' + row.fsm), weaponType: row.weapon, combo,
     fsmId: row.fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []],
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -1660,6 +1682,41 @@ const ACTIONS = {
           r.merged ? 'ok' : 'err');
   },
   'entry.add':  async () => { ST.selIndex = -1; renderTable(); await openEditor(null); },
+
+  // 新建「蓄力条目」：一条对应一个蓄力段，蓄力涨到该段瞬间立即播放。
+  // 大剑想分普通/强/真蓄力：建 3 条（FSMId=65/74/137 各一条），每条再配 1/2/3 段。
+  'entry.addCharge': async () => {
+    const w = ST.weaponFilter;
+    if (!(w === 0 || w === 4 || w === 11)) {
+      toast('先在左栏选中 大剑 / 大锤 / 弓箭，再新建蓄力条目', 'err');
+      return;
+    }
+    const wn = (ST.weapons.find(x => x.id === w) || {}).name || ('武器' + w);
+    const v = await confirmBox({
+      title: '新建蓄力条目（' + wn + '）', okText: '新建', input: true, placeholder: '1、2 或 3',
+      message: '这条负责<b>第几段</b>蓄力？填 <b>1</b> / <b>2</b> / <b>3</b>。<br>'
+             + '蓄力涨到该段的<b>那一瞬间</b>立即播放（不是动作打完才播）。<br><br>'
+             + (w === 0 ? '大剑想分「普通/强/真蓄力」：建 3 条，分别填 FSMId = 65 / 74 / 137。' : '想让不同招式蓄到同一段播不同音，再填 FSMId / LMT。'),
+    });
+    if (!v) return;
+    const lvl = parseInt(String(v).trim(), 10);
+    if (!(lvl >= 1 && lvl <= 3)) { toast('只能填 1 / 2 / 3', 'err'); return; }
+    const entry = {
+      name: '蓄力' + lvl + '段', weaponType: w, combo: ST.active[w] || '',
+      fsmId: -1, fsmTarget: -1, group: '', stop: false,
+      lmt: [], lmtAny: true,
+      def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: lvl,
+      checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
+      checkMode: 0, judgePreset: 0, conds: [],
+    };
+    try {
+      const res = await Backend.call('entries.save', { index: null, entry });
+      await refresh();
+      if (overlayMode()) { toast('已添加蓄力条目，请回主界面编辑'); return; }
+      if (res && res.index != null) openEditor(res.index);
+      toast('已新建「蓄力' + lvl + '段」条目，给它选音效即可', 'ok');
+    } catch (e) { toast('新建失败：' + e.message, 'err'); }
+  },
 
   'combo.create': async () => {
     const inp = $('#comboNewName');

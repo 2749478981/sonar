@@ -93,6 +93,7 @@
         <label class="inline" title="只列出当前激活组合的条目；关掉则列出全部，非激活的会打标记">
           <input type="checkbox" id="onlyActive"><span class="lbltxt">只看激活组合</span></label>
         <button class="primary" data-act="entry.add">＋ 新增条目</button>
+          <button data-act="entry.addCharge" title="新建一条「蓄力条目」：选一个蓄力段，蓄力涨到该段的瞬间立即播放（大剑/大锤/弓箭）">＋ 蓄力条目</button>
         <button data-act="entry.lint" title="检查当前武器条目里容易踩的坑：重复触发条件、没有音效、音效文件不存在、匹配任意动作">检查配置</button>
         <button data-act="entry.merge" title="把触发条件完全相同的条目合并成一条（音效池取并集），整理重复/多余的配置">合并同条件</button>
         <div class="viewswitch list inline-switch">
@@ -237,12 +238,35 @@
     <div class="field"><span>LMT</span><input type="text" id="edLmt" placeholder="如 49265（逗号分隔多个；空 = 不限）"></div>
     <div class="field hint" id="edLmtHint"></div>
 
+    <!-- 蓄力条目：只对大剑/大锤/弓箭显示。不属于"高级设置"，因为它是一种条目类型 -->
+    <div class="field" id="edChargeRow" hidden><span>蓄力等级</span>
+      <select id="edCharge">
+        <option value="0">不指定（按动作触发）</option>
+        <option value="1">蓄到 1 段时</option>
+        <option value="2">蓄到 2 段时</option>
+        <option value="3">蓄到 3 段（满）时</option>
+      </select>
+    </div>
+    <div class="field hint" id="edChargeHint" hidden>
+      这条是<b>蓄力条目</b>：蓄力涨到该段的<b>那一瞬间</b>立即播放（不是动作打完才播）。
+      蓄力归零/换动作会重新计。<br>
+      想分「普通/强/真蓄力」：填对应的 <b>FSMId</b>（普通 65 · 强 74 · 真 137）；
+      想再细到某个过渡/派生阶段：填 <b>LMT</b>。都不填 = 任意招式蓄到该段都响。
+    </div>
+
     <div class="sect">
       <label class="inline big"><input type="checkbox" id="edAdv"> 高级设置（动作组 · FSMTarget · Stop · 判定 · 刃时音效）</label>
     </div>
 
     <div id="edAdvBox" hidden>
-      <div class="field"><span>动作组</span><input type="text" id="edGroup" placeholder="如：气刃4（同一招多帧填同组，只响一次）"></div>
+      <div class="field"><span>动作组</span><input type="text" id="edGroup" placeholder="留空 = 各自独立触发（推荐）"></div>
+      <div class="field hint">
+        <b>动作组是什么</b>：给「同一招的多个触发条目」填<b>同一个组名</b>（如都填 <code>气刃4</code>），
+        它们就<b>整招只响一次</b> —— 哪个条件先命中就播哪个，并且刃级/蓄力等状态在那一刻<b>定格</b>，
+        不会因为招式后段状态变了又响第二声。<br>
+        <b>什么时候要填</b>：一招生效分好几帧、或多条条目指向同一招时。<br>
+        <b>什么时候别填</b>：一招里你<b>故意</b>想让多段各响一声（比如三段斩每段一个音效）→ 留空。
+      </div>
       <div class="field"><span>FSMTarget</span><input type="number" id="edFsmTarget" class="num" title="-1 = 不限定；FSM 是 (target,id) 二元组，跨层重号时用来消歧"></div>
       <div class="field"><span></span><label class="inline"><input type="checkbox" id="edStop"> Stop：命中此动作时停止正在播放的音效</label></div>
 

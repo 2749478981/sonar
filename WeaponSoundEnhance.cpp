@@ -1202,6 +1202,12 @@ struct Attack
     std::string name;             // Name= display label (ignored by matching)
     std::string group;            // Group= logical action: all members fire at most
                                   // once per action occurrence (first trigger wins)
+    // ★ 蓄力等级条目：ChargeLevel=1/2/3 表示"这是一条蓄力条目，负责第 N 段"。
+    //   触发时机 = 蓄力等级升到 N 的那一瞬间（边沿），而不是动作命中；
+    //   仍然受 Weapon/FSM/LMT 过滤，所以能用派生进度（哪一招、哪个过渡）再细分。
+    //   0 = 不是蓄力条目（普通条目，行为与旧版一致）。
+    int chargeLevel = 0;
+    bool chargeLatched = false;   // 本段是否已经在这次蓄力里响过（归零/降段时清）
     Pool defPool;                 // default pool (tag = "any")
     Pool gaugePool[4];            // LS gauge pools, keyed by level 0..3
     Pool chargePool[4];           // 蓄力等级池（大剑/弓/锤），keyed by 蓄力段 0..3
@@ -2148,6 +2154,9 @@ void LoadConfig()
             cur.stop = std::atoi(val.c_str()) != 0;   // Stop=1：命中即停止播放
         } else if (key == "Group") {
             cur.group = val;
+        } else if (key == "ChargeLevel") {
+            const int cl = std::atoi(val.c_str());   // 0=不是蓄力条目；1..3=负责第 N 段
+            cur.chargeLevel = (cl >= 1 && cl <= 3) ? cl : 0;
         } else if (key == "CheckDelayMs") {
             cur.checkDelayMs = std::atoi(val.c_str());
         } else if (key == "CheckTimeoutMs") {
@@ -3287,6 +3296,26 @@ DWORD WINAPI WorkerProc(LPVOID)
                 // 一律走下面的旧逻辑，行为与旧版完全一致。
                 if (e.checkTimeoutMs > 0 && !e.conds.empty()) {
                     TickJudgeEntry(e, match, nowMs, rng, tag);
+                    continue;
+                }
+
+                // ★ 蓄力等级条目（ChargeLevel=1/2/3）：蓄力**升到该段的瞬间**立即播放。
+                //   不按"动作命中"触发，所以蓄力过程中每一段都能各自响一次；
+                //   同时仍受 Weapon/FSM/LMT 过滤 → 可以再按派生进度细分
+                //   （同一段在不同招式/过渡里配不同音效）。
+                if (e.chargeLevel > 0) {
+                    if (!matchBase) { e.chargeLatched = false; continue; }
+                    const int cc = player::gCharge;   // 0..3，-1=读不到
+                    if (cc < e.chargeLevel) { e.chargeLatched = false; continue; }  // 还没蓄到/已归零 → 解锁
+                    if (cc == e.chargeLevel && !e.chargeLatched) {
+                        e.chargeLatched = true;
+                        if (nowMs - e.lastTriggerMs >= (std::uint64_t)gDebounceMs) {
+                            if (FireEntry(e, gauge, rng, nowMs, tag)) e.lastTriggerMs = nowMs;
+                            else e.chargeLatched = false;    // 没播成，下帧重试
+                        } else {
+                            e.chargeLatched = false;         // 防抖拦下，允许下帧再试
+                        }
+                    }
                     continue;
                 }
 

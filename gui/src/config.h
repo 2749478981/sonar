@@ -42,6 +42,10 @@ struct SoundEntry {
     std::string group;          // 动作组（Group=）：同一招的多个触发条目填相同组名，
                                 // 整招只响一次且刃色在首个触发瞬间定格
     bool stop = false;          // Stop=1：命中这条时停止正在播放的音效（不需要音效）
+    // ★ 蓄力等级条目（ChargeLevel=1/2/3）：这条专门负责"蓄到第 N 段"的音效。
+    //   触发 = 蓄力升到该段的瞬间（边沿），仍受 Weapon/FSM/LMT 过滤 →
+    //   同一段可以在不同招式/过渡里配不同音效（派生进度细分）。0 = 普通条目。
+    int chargeLevel = 0;
     PoolSpec def;               // 默认音效（Sound=）；启用判定时它是"都不成立"的兜底池
     PoolSpec gauge[4];          // 刃时音效 0..3（无/白/黄/红；Sound:none|white|yellow|red）
     PoolSpec charge[4];         // 蓄力等级音效 0..3（大剑/弓/锤；Sound:charge0..3，1=蓄力1段…3=蓄满）

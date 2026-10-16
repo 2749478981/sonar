@@ -780,3 +780,5 @@ html.overlay-mode .ovbar .ovx:hover{background:rgba(255,255,255,.25)}
 .bankhdr-right #bankHistRow{display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap}
 .bankhdr-right label.inline{font-size:12px; white-space:nowrap}
 .bankhdr-right .note{margin:0}
+/* 条目列表里的「蓄力N段」徽标（与 wem 徽标同风格，颜色区分） */
+.badge.charge{background:var(--c-purple, #a06bff); color:#fff}
