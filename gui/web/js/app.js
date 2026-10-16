@@ -1033,7 +1033,7 @@ function fillEditor() {
         if (!(e.chargeLevel > 0)) { e.fsmId = -1; e.lmt = []; e.lmtAny = true; }   // 取消蓄力条目不残留派生
         showDeriv();
         if (e.chargeLevel > 0 && e.fsmId < 0 && (!e.lmt || !e.lmt.length))
-          toast('已设为蓄力条目。想按派生细分，用下面的「蓄力派生」选 A/B/C', 'ok');
+          toast('已设为蓄力条目。想按招式分，用下面的「蓄力派生」选蓄力/强蓄力/真蓄力', 'ok');
       };
     }
     if (cutBox) {

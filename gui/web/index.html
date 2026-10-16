@@ -251,21 +251,16 @@
     </div>
     <div class="field" id="edChargeDerivRow" hidden><span>蓄力派生</span>
       <select id="edChargeDeriv">
-        <option value="">不限（任何方式进入蓄力都响）</option>
-        <option value="85">派生 A（FSM 85）</option>
-        <option value="86">派生 B（FSM 86）</option>
-        <option value="102">派生 C（FSM 102）</option>
+        <option value="">不限</option>
+        <option value="85">蓄力（FSM 85）</option>
+        <option value="86">强蓄力（FSM 86）</option>
+        <option value="102">真蓄力（FSM 102）</option>
       </select>
-      <span class="tip">按"怎么进入蓄力"差分。选派生会自动填 FSMId 并把 LMT 设为不限（这三个 FSM 必须 LMT 不限才匹配）</span>
+      <span class="tip">选它会自动填 FSMId，并把 LMT 设为不限</span>
     </div>
     <div class="field hint" id="edChargeHint" hidden>
-      这条是<b>蓄力条目</b>：蓄力涨到该段的<b>那一瞬间</b>立即播放（不是动作打完才播）。
-      蓄力归零/换动作会重新计，所以同一段能反复响。<br>
-      <b>按派生差分</b>：用上面的「蓄力派生」选 A/B/C（= FSM 85/86/102，LMT 必须<b>不限</b>）。
-      若要用别的 FSM/LMT，也可以手动填 —— 但必须是<b>蓄力中</b>的 ID，
-      不能填 65/74/137（那是蓄力<b>结束后</b>的斩击，填了不会响）。<br>
-      <b>核对 ID</b>：进游戏蓄几遍，看 <code>plugins\WeaponSoundEnhance.log</code>（Debug=1）里的
-      <code>[charge] lvl=… fsm=… lmt=…</code> 行。
+      蓄力涨到该段的<b>瞬间</b>立刻播放；蓄力归零或换动作后重新计，同一段能反复响。<br>
+      想按招式分，用上面的「蓄力派生」选蓄力 / 强蓄力 / 真蓄力。
     </div>
 
     <div class="sect">
