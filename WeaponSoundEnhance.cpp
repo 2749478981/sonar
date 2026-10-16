@@ -1204,6 +1204,7 @@ struct Attack
                                   // once per action occurrence (first trigger wins)
     Pool defPool;                 // default pool (tag = "any")
     Pool gaugePool[4];            // LS gauge pools, keyed by level 0..3
+    Pool chargePool[4];           // 蓄力等级池（大剑/弓/锤），keyed by 蓄力段 0..3
     bool stop = false;            // Stop=1：命中这条时停止正在播放的音效（无音效条目）
     bool inMatch = false;         // edge latch: fire once per action (ungrouped entries)
     std::uint64_t lastTriggerMs = 0;  // 每条目独立防抖：以前是全局 gLastTrigger，
@@ -1252,6 +1253,9 @@ struct Attack
     int           winDmg0   = 0;       // 计伤起点
     int           baseAura  = -1;
     int           baseCharge= -1;
+    // 蓄力等级边沿锁存：chargeFired[lvl]=true 表示这一轮蓄力已经在该段播过。
+    // 蓄力归零/换动作时整组清零，这样"蓄到第2段"只会在升段的瞬间响一次。
+    bool          chargeFired[4] = {false, false, false, false};
     // 血量信号基准（QuestDmg 读不到时用它判 dmg）
     float         winHp0    = -1.0f;   // 计伤起点的怪物血量
     int           hpDmg     = 0;       // 窗口内累计掉血（血量信号口径，向上取整）
@@ -1263,8 +1267,22 @@ struct Attack
     {
         if (!defPool.empty()) return true;
         for (int i = 0; i < 4; ++i) if (!gaugePool[i].empty()) return true;
+        for (int i = 0; i < 4; ++i) if (!chargePool[i].empty()) return true;
         for (const auto& c : conds) if (!c.pool.empty()) return true;
         return false;
+    }
+
+    // 是不是"蓄力等级"条目：配了任一 chargePool 段。
+    bool HasCharge() const
+    {
+        for (int i = 0; i < 4; ++i) if (!chargePool[i].empty()) return true;
+        return false;
+    }
+
+    // 清空蓄力段锁存（动作不匹配 / 蓄力归零时调用）。
+    void ClearChargeLatch()
+    {
+        for (int i = 0; i < 4; ++i) chargeFired[i] = false;
     }
 };
 
@@ -1280,6 +1298,25 @@ int GaugeTagToLevel(const std::string& tag)
         if (n == tag) return i;
     }
     return -1;
+}
+
+// 蓄力等级标签：charge0/1/2/3 或简写 c0/c1/c2/c3。
+// 返回 true 表示是蓄力标签，并把段数写进 out（0..3）。
+bool ChargeTagToLevel(const std::string& tag, int& out)
+{
+    out = -1;
+    const std::size_t n = tag.size();
+    // 形如 "chargeN"
+    if (n == 7 && tag.compare(0, 6, "charge") == 0) {
+        const char c = tag[6];
+        if (c >= '0' && c <= '3') { out = c - '0'; return true; }
+    }
+    // 简写 "cN"
+    if (n == 2 && tag[0] == 'c') {
+        const char c = tag[1];
+        if (c >= '0' && c <= '3') { out = c - '0'; return true; }
+    }
+    return false;
 }
 
 std::vector<Attack> gAttacks;
@@ -2149,8 +2186,11 @@ void LoadConfig()
                 cur.conds.push_back(std::move(cp));
             } else {
                 const int lvl = GaugeTagToLevel(ToLower(tag));
+                int clvl = -1;
                 if (lvl >= 0 && lvl < 4)
                     AppendSpecs(cur.gaugePool[lvl], val, plainOrder);
+                else if (ChargeTagToLevel(ToLower(tag), clvl) && clvl >= 0 && clvl < 4)
+                    AppendSpecs(cur.chargePool[clvl], val, plainOrder);
                 else
                     LogD("config: unknown gauge tag / bad expression '%s' ignored", key.c_str());
             }
@@ -2325,6 +2365,7 @@ void PreloadSounds()
     for (const auto& a : attacks) {
         addSpecs(a.defPool);
         for (int i = 0; i < 4; ++i) addSpecs(a.gaugePool[i]);
+        for (int i = 0; i < 4; ++i) addSpecs(a.chargePool[i]);
     }
 
     std::lock_guard<std::mutex> lk(gCacheMutex);
@@ -2770,6 +2811,22 @@ bool FireEntry(const Attack& e, int gauge, std::mt19937& rng, std::uint64_t nowM
     }
     const std::string what = tag + (usedGauge ? std::string(" gauge=") + std::to_string(gauge)
                                               : std::string(" gauge=default"));
+    return FirePool(pool, rng, nowMs, what);
+}
+
+// 蓄力等级池：按 gCharge 段数挑池。charge 无效（-1）时回退默认池。
+// 与 FireEntry 分开，是因为蓄力的触发时机是"升段的瞬间"，不是"动作命中"。
+bool FireCharge(const Attack& e, int charge, std::mt19937& rng, std::uint64_t nowMs,
+                const std::string& tag)
+{
+    const Pool* pool = &e.defPool;
+    bool usedCharge = false;
+    if (charge >= 0 && charge <= 3 && !e.chargePool[charge].empty()) {
+        pool = &e.chargePool[charge];
+        usedCharge = true;
+    }
+    const std::string what = tag + (usedCharge ? std::string(" charge=") + std::to_string(charge)
+                                               : std::string(" charge=default"));
     return FirePool(pool, rng, nowMs, what);
 }
 
@@ -3230,6 +3287,36 @@ DWORD WINAPI WorkerProc(LPVOID)
                 // 一律走下面的旧逻辑，行为与旧版完全一致。
                 if (e.checkTimeoutMs > 0 && !e.conds.empty()) {
                     TickJudgeEntry(e, match, nowMs, rng, tag);
+                    continue;
+                }
+
+                // ★ 蓄力等级条目：不按"动作命中"边沿触发，而是按"蓄力升段"边沿触发。
+                //   蓄到第 1/2/3 段的瞬间立刻播放该段的音效，配合 FSM 分普通/强/真蓄力，
+                //   一条 FSM 写 3 段（Sound:charge1/2/3）就能覆盖大剑 3×3=9 个音效。
+                if (e.HasCharge()) {
+                    if (!matchBase) {
+                        e.ClearChargeLatch();
+                        continue;
+                    }
+                    const int c = player::gCharge;   // 0..3，-1=读不到
+                    if (c < 0 || c > 3) {
+                        e.ClearChargeLatch();
+                        continue;
+                    }
+                    // 降段/归零：清掉更高段的锁存，允许下次再升段触发
+                    for (int i = 0; i < 4; ++i)
+                        if (i > c && e.chargeFired[i]) e.chargeFired[i] = false;
+                    if (c >= 1 && c <= 3 && !e.chargeFired[c] && !e.chargePool[c].empty()) {
+                        e.chargeFired[c] = true;
+                        if (nowMs - e.lastTriggerMs >= (std::uint64_t)gDebounceMs) {
+                            if (FireCharge(e, c, rng, nowMs, tag))
+                                e.lastTriggerMs = nowMs;
+                            else
+                                e.chargeFired[c] = false;   // 没播成，下帧重试
+                        } else {
+                            e.chargeFired[c] = false;       // 防抖拦下，允许下帧再试
+                        }
+                    }
                     continue;
                 }
 

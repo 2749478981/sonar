@@ -800,7 +800,7 @@ async function captureToEntry(r) {
     combo: w >= 0 ? (ST.active[w] || '') : '',
     fsmId: fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []],
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []],
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -847,7 +847,7 @@ async function addWemRecord(r) {
     name: wemSeq(r) || wemBank(r) || ('media ' + media), weaponType: w, combo,
     media: media, bank: r.bank || '', fsmId: -1, fsmTarget: -1, group: '', stop: false,
     lmt: [], lmtAny: false,   // 不限不勾选：wem 条目可以填 LMT 作为附加条件
-    def: [], gauge: [[], [], [], []],
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []],
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -950,7 +950,7 @@ const JUDGE_FALLBACK = [
 function blankEntry() {
   return { name: '', weaponType: ST.weaponFilter >= 0 ? ST.weaponFilter : -1, combo: '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
-    def: [], gauge: [[], [], [], []],
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []],
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [] };
 }
@@ -1253,8 +1253,10 @@ const poolAccent = k => POOL_ACCENTS[Math.abs(k) % POOL_ACCENTS.length];
 
 function buildPools(box, e) {
   const isLS = e.weaponType === 3;
+  const hasCharge = e.weaponType === 0 || e.weaponType === 4 || e.weaponType === 11;   // 大剑/大锤/弓箭
   poolSeq = 0;   // 每次渲染重新分配配色
   e.gauge = e.gauge || [[], [], [], []];
+  e.charge = e.charge || [[], [], [], []];
 
   const pool = (title, arr, key, canRemove) => {
     const openKey = key;
@@ -1294,6 +1296,13 @@ function buildPools(box, e) {
     box.appendChild(h('div', { class: 'sect' }, '刃时音效（太刀专用，未配置的刃色回退默认音效）'));
     ['无刃时', '白刃时', '黄刃时', '红刃时'].forEach((nm, i) => {
       pool(nm, e.gauge[i], 'g' + i, true);
+    });
+  }
+
+  if (hasCharge && ED.adv) {
+    box.appendChild(h('div', { class: 'sect' }, '蓄力等级音效（大剑/大锤/弓箭，蓄到该段的瞬间立即播放）'));
+    ['蓄力1段', '蓄力2段', '蓄力3段(满)'].forEach((nm, i) => {
+      pool(nm, e.charge[i + 1], 'c' + (i + 1), true);
     });
   }
 }
@@ -1435,7 +1444,7 @@ async function addFsmToCombo(row) {
     name: row.name || ('fsm ' + row.fsm), weaponType: row.weapon, combo,
     fsmId: row.fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []],
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []],
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };

@@ -141,6 +141,22 @@ const char* GaugeUiName(int level) {
     return (level >= 0 && level <= 3) ? names[level] : "?";
 }
 
+int ChargeTagIndex(const std::string& tag) {
+    // 蓄力标签：charge0..3 或简写 c0..3
+    const std::string t = ToLower(Trim(tag));
+    if (t.size() == 7 && t.compare(0, 6, "charge") == 0) {
+        const char c = t[6];
+        if (c >= '0' && c <= '3') return c - '0';
+    }
+    if (t.size() == 2 && t[0] == 'c' && t[1] >= '0' && t[1] <= '3') return t[1] - '0';
+    return -1;
+}
+
+const char* ChargeTagName(int level) {
+    static const char* names[4] = {"charge0", "charge1", "charge2", "charge3"};
+    return (level >= 0 && level <= 3) ? names[level] : "?";
+}
+
 std::uint64_t ParsePlayerRoot(const std::string& s, std::uint64_t defval) {
     std::string v = Trim(s);
     if (v.empty()) return defval;
@@ -386,6 +402,8 @@ bool LoadConfig(const std::string& path, Config& cfg) {
             int lvl = GaugeTagIndex(ToLower(key.substr(6)));
             if (lvl >= 0 && lvl < 4)
                 AppendSpecs(cur.gauge[lvl], val, plainOrder);
+            else if ((lvl = ChargeTagIndex(key.substr(6))) >= 0 && lvl < 4)
+                AppendSpecs(cur.charge[lvl], val, plainOrder);
         } else if (key == "SoundDelay") {
             for (const auto& t : SplitList(val))
                 rawDelay.push_back(std::atoi(t.c_str()));
@@ -475,6 +493,10 @@ static void WriteEntry(const SoundEntry& e, int n, std::string& o) {
         std::string k = std::string("Sound:") + GaugeTagName(i);
         WritePool(e.gauge[i], k.c_str(), o);
     }
+    for (int i = 0; i < 4; ++i) {
+        std::string k = std::string("Sound:") + ChargeTagName(i);
+        WritePool(e.charge[i], k.c_str(), o);
+    }
     o += "\r\n";
 }
 
@@ -499,6 +521,8 @@ bool SaveConfig(const std::string& path, const Config& cfg) {
     o += ";                        时整招只响一次，刃色以首个触发瞬间为准。\r\n";
     o += ";    Sound=               默认音效；Sound:none/white/yellow/red= 太刀无刃时/白刃时/\r\n";
     o += ";                        黄刃时/红刃时 的音效（未配的刃时回退默认音效）。\r\n";
+    o += ";    Sound:charge1/2/3=  蓄力等级音效：蓄到第1/2/3段的瞬间立即播放（大剑/弓/锤）；\r\n";
+    o += ";                        配合 FSMId 分 普通/强/真蓄力，一条 FSM 写3段即可。\r\n";
     o += ";    音效写法 path|延时ms|音量0..200|F ，末尾 F = 固定音效：命中时恒播，\r\n";
     o += ";                        同池其余未固定音效仍随机抽一条同时播放。\r\n";
     o += ";  每武器配置组合：默认组合的条目写在 [WeaponW] 段里；命名组合写在\r\n";

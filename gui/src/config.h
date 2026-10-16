@@ -44,6 +44,7 @@ struct SoundEntry {
     bool stop = false;          // Stop=1：命中这条时停止正在播放的音效（不需要音效）
     PoolSpec def;               // 默认音效（Sound=）；启用判定时它是"都不成立"的兜底池
     PoolSpec gauge[4];          // 刃时音效 0..3（无/白/黄/红；Sound:none|white|yellow|red）
+    PoolSpec charge[4];         // 蓄力等级音效 0..3（大剑/弓/锤；Sound:charge0..3，1=蓄力1段…3=蓄满）
 
     // ---- 延迟判定（checkTimeoutMs > 0 且 conds 非空时启用）----
     // 动作匹配上只是开窗，接着盯一段时间，按条件挑音效池。

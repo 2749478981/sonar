@@ -1130,6 +1130,9 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     JVal g = JVal::arr();
     for (int i = 0; i < 4; ++i) g.push(PoolToJson(e.gauge[i]));
     v.set("gauge", g);
+    JVal ch = JVal::arr();
+    for (int i = 0; i < 4; ++i) ch.push(PoolToJson(e.charge[i]));
+    v.set("charge", ch);
 
     v.set("checkDelayMs", JVal(e.checkDelayMs));
     v.set("checkTimeoutMs", JVal(e.checkTimeoutMs));
@@ -1150,6 +1153,7 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     // 音效总数的便捷字段：前端列表页要显示"3 个音效"，省得它在 JS 里数三层
     int n = (int)e.def.specs.size();
     for (int i = 0; i < 4; ++i) n += (int)e.gauge[i].specs.size();
+    for (int i = 0; i < 4; ++i) n += (int)e.charge[i].specs.size();
     for (std::size_t i = 0; i < e.conds.size(); ++i) n += (int)e.conds[i].pool.specs.size();
     v.set("soundCount", JVal(n));
     return v;
@@ -1238,6 +1242,10 @@ SoundEntry EntryFromJson(const JVal& v, const std::vector<std::string>& allowedC
     if (jg && jg->isArr()) {
         for (int i = 0; i < 4 && i < (int)jg->a.size(); ++i) PoolFromJson(jg->a[i], e.gauge[i]);
     }
+    const JVal* jch = v.find("charge");
+    if (jch && jch->isArr()) {
+        for (int i = 0; i < 4 && i < (int)jch->a.size(); ++i) PoolFromJson(jch->a[i], e.charge[i]);
+    }
 
     // 判定：只有存在判定条件时这些字段才有意义，但仍原样保留（用户可能先填参数后加条件）
     e.checkDelayMs = v.optInt("checkDelayMs", 0);
@@ -1286,6 +1294,8 @@ std::string EntryKey(const SoundEntry& e) {
     for (std::size_t i = 0; i < e.def.specs.size(); ++i) k += e.def.specs[i].path + ";";
     for (int i = 0; i < 4; ++i)
         for (std::size_t j = 0; j < e.gauge[i].specs.size(); ++j) k += e.gauge[i].specs[j].path + ";";
+    for (int i = 0; i < 4; ++i)
+        for (std::size_t j = 0; j < e.charge[i].specs.size(); ++j) k += e.charge[i].specs[j].path + ";";
     for (std::size_t i = 0; i < e.conds.size(); ++i)
         for (std::size_t j = 0; j < e.conds[i].pool.specs.size(); ++j) k += e.conds[i].pool.specs[j].path + ";";
     return k;
@@ -3295,6 +3305,7 @@ bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::s
         std::vector<std::vector<SoundSpec>*> pools;
         pools.push_back(&c2.def.specs);
         for (int g = 0; g < 4; ++g) pools.push_back(&c2.gauge[g].specs);
+        for (int g = 0; g < 4; ++g) pools.push_back(&c2.charge[g].specs);
         for (std::size_t ci = 0; ci < c2.conds.size(); ++ci) pools.push_back(&c2.conds[ci].pool.specs);
 
         for (std::size_t pi = 0; pi < pools.size(); ++pi) {
@@ -3481,6 +3492,7 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
             std::vector<std::vector<SoundSpec>*> pools;
             pools.push_back(&e.def.specs);
             for (int g = 0; g < 4; ++g) pools.push_back(&e.gauge[g].specs);
+            for (int g = 0; g < 4; ++g) pools.push_back(&e.charge[g].specs);
             for (std::size_t ci = 0; ci < e.conds.size(); ++ci) pools.push_back(&e.conds[ci].pool.specs);
             for (std::size_t pi = 0; pi < pools.size(); ++pi) {
                 std::vector<SoundSpec>& specs = *pools[pi];
@@ -3970,6 +3982,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 SoundEntry& keep = out[it->second];
                 addPool(keep.def, e.def);
                 for (int g = 0; g < 4; ++g) addPool(keep.gauge[g], e.gauge[g]);
+                for (int g = 0; g < 4; ++g) addPool(keep.charge[g], e.charge[g]);
                 for (std::size_t c = 0; c < e.conds.size(); ++c) {
                     bool dup = false;
                     for (std::size_t d = 0; d < keep.conds.size(); ++d)
@@ -4019,7 +4032,10 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 const SoundEntry& e = im->cfg.entries[i];
                 if (w >= 0 && e.weaponType != w) continue;
                 const bool hasSound = !e.def.empty() || !e.gauge[0].empty() || !e.gauge[1].empty() ||
-                                      !e.gauge[2].empty() || !e.gauge[3].empty() || !e.conds.empty();
+                                      !e.gauge[2].empty() || !e.gauge[3].empty() ||
+                                      !e.charge[0].empty() || !e.charge[1].empty() ||
+                                      !e.charge[2].empty() || !e.charge[3].empty() ||
+                                      !e.conds.empty();
                 if (!hasSound && !e.stop) {
                     ++noSound;
                     if (noSound <= 3) { if (!noSoundNames.empty()) noSoundNames += "、"; noSoundNames += e.name.empty() ? ("#" + std::to_string(i)) : e.name; }
