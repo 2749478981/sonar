@@ -638,7 +638,7 @@ function renderTable() {
           sm.fixed ? h('span', { class: 'badge', text: 'F' }) : null,
           h('span', { class: 'sndname', text: sm.text }))),
       h('td', {}, h('div', { class: 'acts' },
-        h('button', { onclick: async ev => { ev.stopPropagation(); await previewEntry(i); } }, '预览'),
+        h('button', { onclick: async ev => { ev.stopPropagation(); await previewEntry(i, false); } }, '预览'),
         h('button', { onclick: ev => { ev.stopPropagation(); openEditor(i); } }, '编辑'),
         h('button', { onclick: async ev => {
           ev.stopPropagation();
@@ -1781,9 +1781,11 @@ async function openLib(pickMode) {
   if (!LIB.files.length && !pickMode) toast('点「导入文件夹…」把音效收进来', 'ok');
 }
 // 预览一个条目被触发后的整体效果
-async function previewEntry(index) {
+async function previewEntry(index, useDraft) {
   try {
-    const r = await Backend.call('entry.preview', { index });
+    // useDraft=true 时直接预览编辑器里的草稿 → 改了没保存也能立刻听到
+    const payload = (useDraft && ED.draft) ? { entry: ED.draft } : { index };
+    const r = await Backend.call('entry.preview', payload);
     toast('预览「' + (r.pool || '音效') + '」：' + r.count + ' 条', 'ok');
   } catch (e) { toast('预览失败：' + (e.message || e), 'err'); }
 }
@@ -1845,8 +1847,8 @@ const ACTIONS = {
   },
   // 预览这条被触发后的整体效果（固定音效全播 + 非固定随机一条，各带延时/音量）
   'entry.preview': async () => {
-    if (ED.index == null) { toast('先保存这条条目，再预览整体效果', 'err'); return; }
-    await previewEntry(ED.index);
+    if (!ED.draft) { toast('先打开一个条目', 'err'); return; }
+    await previewEntry(ED.index, true);   // 用草稿：随时反映当前编辑
   },
 
   'entry.add':  async () => { ST.selIndex = -1; renderTable(); await openEditor(null); },

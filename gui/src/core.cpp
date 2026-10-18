@@ -4510,9 +4510,18 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
         //  按游戏里的规则挑音效（固定音效全播 + 非固定随机抽一条），各自带自己的延时/音量，
         //  一次性叠加播出来 —— 不用进游戏就能听这条配好的整体效果。
         if (method == "entry.preview") {
-            const int idx = p.optInt("index", -1);
-            if (idx < 0 || idx >= (int)im->cfg.entries.size()) return ErrJson("条目不存在");
-            const SoundEntry& e = im->cfg.entries[idx];
+            // ★ 支持传 entry（编辑器草稿）：改了还没保存也能立刻听到效果，
+            //   不用"先保存再预览"（用户要求预览随时更新）。
+            SoundEntry draft;
+            const JVal* je = p.find("entry");
+            if (je && je->isObj()) {
+                draft = EntryFromJson(*je, im->AllowedCombos(je->optInt("weaponType", -1)));
+            } else {
+                const int idx = p.optInt("index", -1);
+                if (idx < 0 || idx >= (int)im->cfg.entries.size()) return ErrJson("条目不存在");
+                draft = im->cfg.entries[idx];
+            }
+            const SoundEntry& e = draft;
 
             const PoolSpec* pool = nullptr;
             std::string label;
@@ -4565,7 +4574,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 PlayPreviewFile(full, gain, sp.delay > 0 ? (unsigned)sp.delay : 0, false);
                 names.push(JVal(ToSlash(sp.path)));
             }
-            im->SetStatus("预览条目「" + (e.name.empty() ? std::string("#") + std::to_string(idx) : e.name)
+            im->SetStatus("预览条目「" + (e.name.empty() ? std::string("(未命名)") : e.name)
                           + "」的 " + label + "：共播 " + std::to_string(picked.size()) + " 条");
             JVal d = JVal::obj();
             d.set("pool", JVal(label));
