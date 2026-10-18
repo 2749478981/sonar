@@ -855,11 +855,11 @@ struct PvCtx {
 DWORD WINAPI PvWorker(LPVOID param) {
     std::unique_ptr<PvCtx> ctx((PvCtx*)param);
     const unsigned long long myEpoch = gPvStopEpoch.load(std::memory_order_relaxed);
-    for (unsigned waited = 0; waited < ctx->delayMs; waited += 10) {   // 延迟期间也要能被停止
-        if (gPvStopEpoch.load(std::memory_order_relaxed) != myEpoch) return 0;
-        ::Sleep(10);
-    }
-
+    // ★ 延时从"发起试听的那一刻"算，而不是从"解码完之后"算 ——
+    //   游戏那边延时是从**触发瞬间**算的（样本早就解码好了），
+    //   如果这里把解码耗时也算进延时之外，就会"游戏比预览快一点"（实测反馈）。
+    //   所以：先记开始时间 → 解码 → 只补足剩余的延时。
+    const unsigned long long t0 = ::GetTickCount64();
     HANDLE h = ::CreateFileW(ctx->path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return 0;
@@ -887,6 +887,16 @@ DWORD WINAPI PvWorker(LPVOID param) {
             const float v = pcm.samples[i] * g;
             pcm.samples[i] = (std::int16_t)(v > 32767.0f ? 32767.0f : (v < -32768.0f ? -32768.0f : v));
         }
+
+    // 只补足剩余延时（解码已经花掉的时间要扣掉），到点就直接发声
+    {
+        const unsigned long long spent = ::GetTickCount64() - t0;
+        const unsigned long long remain = (ctx->delayMs > spent) ? (ctx->delayMs - spent) : 0;
+        for (unsigned long long waited = 0; waited < remain; waited += 10) {
+            if (gPvStopEpoch.load(std::memory_order_relaxed) != myEpoch) return 0;
+            ::Sleep(10);
+        }
+    }
 
     WAVEFORMATEX wfx{};
     wfx.wFormatTag = WAVE_FORMAT_PCM;
