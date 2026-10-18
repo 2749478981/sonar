@@ -31,11 +31,13 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <shlobj.h>     // SHBrowseForFolder（选导出目录）
+#pragma comment(lib, "ole32.lib")   // CoCreateInstance（现代文件夹对话框）
 #include <shellapi.h>
 #include <mmsystem.h>
 #include <urlmon.h>
 
 #include <algorithm>
+#include <random>
 #include <atomic>
 #include <cstring>
 #pragma comment(lib, "version.lib")   // GetFileVersionInfo（判定插件 DLL 版本）
@@ -919,8 +921,8 @@ DWORD WINAPI PvWorker(LPVOID param) {
     return 0;
 }
 
-void PlayPreviewFile(const std::wstring& path, float gain, unsigned delayMs) {
-    StopAllPreview();   // ★ 试听打断上一条：点下一条时先停掉正在播的
+void PlayPreviewFile(const std::wstring& path, float gain, unsigned delayMs, bool stopFirst = true) {
+    if (stopFirst) StopAllPreview();   // ★ 试听打断上一条；"整体效果预览"要叠加所以传 false
     PvCtx* c = new PvCtx();
     c->path = path;
     c->gain = gain;
@@ -1100,10 +1102,7 @@ void PoolFromJson(const JVal& v, PoolSpec& out) {
     for (std::size_t i = 0; i < v.a.size(); ++i) {
         SoundSpec s = SpecFromJson(v.a[i]);
         if (s.path.empty()) continue;                       // 空路径等于没填
-        bool dup = false;
-        for (std::size_t k = 0; k < out.specs.size(); ++k)
-            if (out.specs[k].path == s.path) { dup = true; break; }
-        if (dup) continue;                                  // 同池重复路径没有意义
+                // ★ 允许同池里同一个文件出现多次（用户会故意加两遍：不同延时/随机权重）
         out.specs.push_back(s);
     }
 }
@@ -3079,12 +3078,63 @@ static int CALLBACK BrowseInitProc(HWND hwnd, UINT msg, LPARAM, LPARAM data) {
         ::SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, data);
     return 0;
 }
+// 现代"选文件夹"对话框（IFileOpenDialog + FOS_PICKFOLDERS）：
+//   老式的 SHBrowseForFolder 是一棵树，**不能粘贴路径**，和"导入音效"的文件对话框体验不一致。
+//   现代对话框顶部有地址栏、可以直接粘路径，也能记住上次位置。
+//   COM 在本进程已由 WebView2 初始化（同一条消息线程），所以这里直接用即可；
+//   万一 CoCreateInstance 失败就回退到老式对话框，保证功能不丢。
+std::string PickFolderModern(void* owner, const std::wstring& initDir, const wchar_t* title) {
+    IFileOpenDialog* dlg = nullptr;
+    const HRESULT hr = ::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                          IID_PPV_ARGS(&dlg));
+    if (FAILED(hr) || !dlg) return std::string();
+
+    DWORD opts = 0;
+    if (SUCCEEDED(dlg->GetOptions(&opts)))
+        dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    if (title) dlg->SetTitle(title);
+    if (!initDir.empty()) {
+        IShellItem* it = nullptr;
+        if (SUCCEEDED(::SHCreateItemFromParsingName(initDir.c_str(), nullptr, IID_PPV_ARGS(&it))) && it) {
+            dlg->SetFolder(it);
+            it->Release();
+        }
+    }
+
+    std::string out;
+    if (SUCCEEDED(dlg->Show(OwnerOf(owner)))) {
+        IShellItem* it = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&it)) && it) {
+            PWSTR p = nullptr;
+            if (SUCCEEDED(it->GetDisplayName(SIGDN_FILESYSPATH, &p)) && p) {
+                out = Utf8FromWide(p);
+                ::CoTaskMemFree(p);
+            }
+            it->Release();
+        }
+    }
+    dlg->Release();
+    return out;
+}
+
 std::string PickFolder(void* owner, const std::wstring& initDir) {
+    // 先试现代对话框（可粘贴路径）
+    {
+        std::string modern = PickFolderModern(owner, initDir, L"选择文件夹（可直接在地址栏粘贴路径）");
+        if (!modern.empty()) return modern;
+        // 用户取消时 Show 返回 HRESULT_FROM_WIN32(ERROR_CANCELLED)：这里无法区分"取消"与"失败"，
+        // 所以只在**现代对话框整体不可用**时回退。用一次探测判断可用性。
+        IFileOpenDialog* probe = nullptr;
+        const HRESULT hr = ::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                              IID_PPV_ARGS(&probe));
+        if (SUCCEEDED(hr) && probe) { probe->Release(); return std::string(); }   // 可用 → 用户是取消
+    }
+
     wchar_t disp[MAX_PATH * 2] = {};
     BROWSEINFOW bi{};
     bi.hwndOwner = OwnerOf(owner);
     bi.pszDisplayName = disp;
-    bi.lpszTitle = L"选择导出目录（nbnk 会写到这里）";
+    bi.lpszTitle = L"选择文件夹";
     bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
     bi.lpfn = BrowseInitProc;
     bi.lParam = initDir.empty() ? 0 : (LPARAM)initDir.c_str();
@@ -4453,6 +4503,75 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             JVal d = JVal::obj();
             d.set("playing", JVal(true));
             d.set("resolved", JVal(ToSlash(Utf8FromWide(full))));
+            return OkJson(d);
+        }
+
+        // ---------------- 预览"这个条目被触发后的整体效果" ----------------
+        //  按游戏里的规则挑音效（固定音效全播 + 非固定随机抽一条），各自带自己的延时/音量，
+        //  一次性叠加播出来 —— 不用进游戏就能听这条配好的整体效果。
+        if (method == "entry.preview") {
+            const int idx = p.optInt("index", -1);
+            if (idx < 0 || idx >= (int)im->cfg.entries.size()) return ErrJson("条目不存在");
+            const SoundEntry& e = im->cfg.entries[idx];
+
+            const PoolSpec* pool = nullptr;
+            std::string label;
+            if (!e.def.empty()) { pool = &e.def; label = "默认音效"; }
+            if (!pool) {
+                static const char* gname[4] = {"无刃时", "白刃时", "黄刃时", "红刃时"};
+                for (int i = 0; i < 4; ++i)
+                    if (!e.gauge[i].empty()) { pool = &e.gauge[i]; label = gname[i]; break; }
+            }
+            if (!pool) {
+                for (int i = 1; i < 4; ++i)
+                    if (!e.charge[i].empty()) { pool = &e.charge[i]; label = "蓄力" + std::to_string(i) + "段"; break; }
+            }
+            if (!pool) {
+                for (std::size_t i = 0; i < e.conds.size(); ++i)
+                    if (!e.conds[i].pool.empty()) {
+                        pool = &e.conds[i].pool;
+                        label = "条件 [" + e.conds[i].expr + "]";
+                        break;
+                    }
+            }
+            if (!pool || pool->specs.empty()) return ErrJson("这条还没有音效（先加音效再预览）");
+
+            // 挑选顺序与游戏一致：固定音效全播；非固定里随机抽一条（旧版"更多音效"关掉时只取第一条）
+            std::vector<const SoundSpec*> picked;
+            std::vector<const SoundSpec*> randoms;
+            for (std::size_t i = 0; i < pool->specs.size(); ++i) {
+                if (pool->specs[i].fixed) picked.push_back(&pool->specs[i]);
+                else randoms.push_back(&pool->specs[i]);
+            }
+            if (!randoms.empty()) {
+                if (im->cfg.global.moreSounds) {
+                    static std::mt19937 rng((unsigned)::GetTickCount64());
+                    std::uniform_int_distribution<int> d(0, (int)randoms.size() - 1);
+                    picked.push_back(randoms[d(rng)]);
+                } else {
+                    picked.push_back(randoms[0]);
+                }
+            }
+            if (picked.empty()) return ErrJson("这条还没有音效");
+
+            StopAllPreview();   // 只在这里停一次；下面几条要叠在一起播（整体效果）
+            JVal names = JVal::arr();
+            for (std::size_t i = 0; i < picked.size(); ++i) {
+                const SoundSpec& sp = *picked[i];
+                const std::wstring full = ResolveSoundPath(corePtr, sp.path);
+                float gain = (im->cfg.global.volume / 100.0f) * ((sp.vol < 0 ? 0 : (sp.vol > 200 ? 200 : sp.vol)) / 100.0f);
+                if (gain < 0.0f) gain = 0.0f;
+                if (gain > 2.0f) gain = 2.0f;
+                PlayPreviewFile(full, gain, sp.delay > 0 ? (unsigned)sp.delay : 0, false);
+                names.push(JVal(ToSlash(sp.path)));
+            }
+            im->SetStatus("预览条目「" + (e.name.empty() ? std::string("#") + std::to_string(idx) : e.name)
+                          + "」的 " + label + "：共播 " + std::to_string(picked.size()) + " 条");
+            JVal d = JVal::obj();
+            d.set("pool", JVal(label));
+            d.set("count", JVal((int)picked.size()));
+            d.set("files", names);
+            d.set("status", JVal(im->status));
             return OkJson(d);
         }
 

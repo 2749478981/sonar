@@ -1864,15 +1864,8 @@ void AppendSpecs(Pool& pool, const std::string& value,
         SoundSpec sp;
         ParseSoundSpec(tok, sp);
         if (sp.path.empty()) continue;
-        // dedupe by path within the pool (F and random sets stay disjoint)
-        bool dup = false;
-        for (const auto& ex : pool.specs) {
-            if (ex.path == sp.path) { dup = true; break; }
-        }
-        if (dup) {
-            LogD("config: duplicate sound '%s' ignored", sp.path.c_str());
-            continue;
-        }
+        // ★ 允许同一个文件在一个池里出现多次：用户会故意加两遍（不同延时各播一次、
+        //   或者给随机池加权重）。以前这里按路径去重，第二遍会被静默丢掉。
         const int idx = (int)pool.specs.size();
         const bool wasPlain = sp.plain;
         pool.specs.push_back(std::move(sp));
@@ -2762,7 +2755,7 @@ bool FirePool(const Pool* pool, std::mt19937& rng, std::uint64_t nowMs,
     // to the cooldown /「播放期间不重复」策略，避免重复触发条目把它叠起来。
     for (int i : fixedIdx) {
         const SoundSpec& sp = pool->specs[i];
-        const std::string pathKey = strconv::ToUtf8(AbsFor(sp.path));
+        const std::string pathKey = strconv::ToUtf8(AbsFor(sp.path)) + "#" + std::to_string(sp.delay);   // ★ 路径+延时分别计时（同文件可加两次、不同延时各播一遍）
         if (SpecBlocked(sp, pathKey, nowMs)) {
             LogD("SKIP(fixed): cooldown/playing %s (cd=%d lock=%d)", pathKey.c_str(),
                  sp.cdMs, (int)sp.playLock);
@@ -2785,7 +2778,7 @@ bool FirePool(const Pool* pool, std::mt19937& rng, std::uint64_t nowMs,
         const int start = n > 1 ? std::uniform_int_distribution<int>(0, n - 1)(rng) : 0;
         for (int t = 0; t < n; ++t) {
             const SoundSpec& sp = pool->specs[randomIdx[(start + t) % n]];
-            const std::string pathKey = strconv::ToUtf8(AbsFor(sp.path));
+        const std::string pathKey = strconv::ToUtf8(AbsFor(sp.path)) + "#" + std::to_string(sp.delay);   // ★ 路径+延时分别计时（同文件可加两次、不同延时各播一遍）
             if (SpecBlocked(sp, pathKey, nowMs)) continue;
             unsigned dur = 0;
             if (PlayOne(sp, what, &dur)) { NotePlayed(sp, pathKey, nowMs, dur); any = true; break; }
@@ -2804,7 +2797,7 @@ bool FirePool(const Pool* pool, std::mt19937& rng, std::uint64_t nowMs,
     }
     for (int t = 0; t < count; ++t) {
         const SoundSpec& sp = pool->specs[(start + t) % n];
-        const std::string pathKey = strconv::ToUtf8(AbsFor(sp.path));
+        const std::string pathKey = strconv::ToUtf8(AbsFor(sp.path)) + "#" + std::to_string(sp.delay);   // ★ 路径+延时分别计时（同文件可加两次、不同延时各播一遍）
         if (SpecBlocked(sp, pathKey, nowMs)) continue;
         unsigned dur = 0;
         if (PlayOne(sp, what, &dur)) { NotePlayed(sp, pathKey, nowMs, dur); any = true; break; }

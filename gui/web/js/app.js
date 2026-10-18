@@ -638,6 +638,7 @@ function renderTable() {
           sm.fixed ? h('span', { class: 'badge', text: 'F' }) : null,
           h('span', { class: 'sndname', text: sm.text }))),
       h('td', {}, h('div', { class: 'acts' },
+        h('button', { onclick: async ev => { ev.stopPropagation(); await previewEntry(i); } }, '预览'),
         h('button', { onclick: ev => { ev.stopPropagation(); openEditor(i); } }, '编辑'),
         h('button', { onclick: async ev => {
           ev.stopPropagation();
@@ -1359,7 +1360,7 @@ function buildPools(box, e) {
     const browse = h('button', { onclick: async () => {
       const r = await Backend.call('sound.pickMulti', {});
       (r.paths || []).forEach(p => {
-        if (!arr.some(s => s.path === p))
+      // 允许同一个文件加多次（不同延时 / 随机权重）
           arr.push({ path: p, delay: 0, vol: 100, fixed: false, cdMs: 0, playLock: false });
       });
       fillPools();
@@ -1417,7 +1418,7 @@ function fillConds() {
       h('button', { onclick: async () => {
         const r = await Backend.call('sound.pickMulti', {});
         (r.paths || []).forEach(p => {
-          if (!c.pool.some(s => s.path === p))
+          // 允许同一个文件加多次
             c.pool.push({ path: p, delay: 0, vol: 100, fixed: false, cdMs: 0, playLock: false });
         });
         fillConds();
@@ -1779,6 +1780,14 @@ async function openLib(pickMode) {
   openModal('#mLib');
   if (!LIB.files.length && !pickMode) toast('点「导入文件夹…」把音效收进来', 'ok');
 }
+// 预览一个条目被触发后的整体效果
+async function previewEntry(index) {
+  try {
+    const r = await Backend.call('entry.preview', { index });
+    toast('预览「' + (r.pool || '音效') + '」：' + r.count + ' 条', 'ok');
+  } catch (e) { toast('预览失败：' + (e.message || e), 'err'); }
+}
+
 const ACTIONS = {
   'cfg.save':   async () => {
     const r = await Backend.call('config.save', {});
@@ -1834,6 +1843,12 @@ const ACTIONS = {
     toast(r.merged ? `已合并 ${r.merged} 条同条件条目（剩余 ${r.left} 条）` : (r.status || '没有可合并的条目'),
           r.merged ? 'ok' : 'err');
   },
+  // 预览这条被触发后的整体效果（固定音效全播 + 非固定随机一条，各带延时/音量）
+  'entry.preview': async () => {
+    if (ED.index == null) { toast('先保存这条条目，再预览整体效果', 'err'); return; }
+    await previewEntry(ED.index);
+  },
+
   'entry.add':  async () => { ST.selIndex = -1; renderTable(); await openEditor(null); },
 
 
@@ -1977,8 +1992,9 @@ const ACTIONS = {
     const target = LIB.pickMode;
     if (!target || !LIB.picked.size) { toast('先点几行选中音效', 'err'); return; }
     const paths = Array.from(LIB.picked);
-    target.forEach(p => {
-      if (!target.some(s => s.path === p))
+    // ★ 遍历"选中的路径"（以前误写成遍历 target 自己 → 什么也没加进来）
+    paths.forEach(p => {
+      // 允许同一个文件加多次
         target.push({ path: p, delay: 0, vol: 100, fixed: false, cdMs: 0, playLock: false });
     });
     toast('已加入 ' + paths.length + ' 个音效', 'ok');
