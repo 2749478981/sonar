@@ -620,14 +620,37 @@ function renderTable() {
     const sm = soundSummary(e);
     const inCombo = entryActive(e);
     const isWem = wem;
+    const isOff = (e.enabled === false);            // 停用的条目：整行灰显 + 徽标
     const tr = h('tr', {
-      class: (i === ST.selIndex ? 'sel ' : '') + (inCombo ? '' : 'inactive') + (inGroup ? ' grpmem' : ''),
-      title: inCombo ? '' : '这条属于别的组合，当前不生效（切换组合后才会生效）',
+      class: (i === ST.selIndex ? 'sel ' : '') + (inCombo ? '' : 'inactive') +
+             (inGroup ? ' grpmem' : '') + (isOff ? ' off' : ''),
+      title: isOff ? '这条已停用：游戏里不会触发（勾上前面的框即可启用）'
+                   : (inCombo ? '' : '这条属于别的组合，当前不生效（切换组合后才会生效）'),
     },
-      h('td', {}, h('span', { class: 'nm', title: displayName(e), text: displayName(e) }),
+      h('td', {},
+        // ★ 启用开关直接放列表里：一眼看到、一点就切（想单独听某一条时把别的停掉即可）
+        h('input', { type: 'checkbox', class: 'enbox', checked: !isOff,
+          title: isOff ? '点击启用这条' : '取消勾选 = 停用这条（配置保留，游戏里不触发）',
+          onclick: ev => ev.stopPropagation(),
+          onchange: async ev => {
+            ev.stopPropagation();
+            const on = ev.target.checked;
+            ev.target.disabled = true;
+            try {
+              await Backend.call('entries.setEnabled', { index: i, on });
+              e.enabled = on;
+              await refresh();
+              toast(on ? '已启用这条条目' : '已停用这条条目（游戏里不触发）', 'ok');
+            } catch (err) {
+              ev.target.checked = !on;
+              toast('切换失败：' + (err.message || err), 'err');
+            } finally { ev.target.disabled = false; }
+          } }),
+        h('span', { class: 'nm', title: displayName(e), text: displayName(e) }),
         isWem ? h('span', { class: 'badge wem', text: 'wem', style: 'margin-left:7px' }) : null,
         (e.chargeLevel > 0) ? h('span', { class: 'badge charge', text: '蓄力' + e.chargeLevel + '段',
           style: 'margin-left:7px', title: '蓄力条目：蓄力涨到第 ' + e.chargeLevel + ' 段的瞬间立即播放' }) : null,
+        isOff ? h('span', { class: 'badge off', text: '已停用', style: 'margin-left:7px' }) : null,
         inCombo ? null : h('span', { class: 'badge warn', text: '未激活', style: 'margin-left:7px' })),
       h('td', {}, wInline(e.weaponType)),   // 武器列由表格 class 整体隐藏（表头+单元格一起，避免错位）
       // WEM 视图：WEM id + 序号（nbnk 内第几个）；派生视图：LMT + FSMId

@@ -785,3 +785,8 @@ html.overlay-mode .ovbar .ovx:hover{background:rgba(255,255,255,.25)}
 /* 已按武器筛选时整列隐藏「武器」：表头和单元格一起，避免列错位 */
 #entryTable.hideweapon th:nth-child(2),
 #entryTable.hideweapon td:nth-child(2){display:none}
+/* 停用的条目：整行灰显 + 徽标；列表里的启用复选框 */
+tr.off > td{opacity:.45}
+tr.off .nm{text-decoration:line-through}
+.badge.off{background:var(--c-red, #ff453a); color:#fff}
+td .enbox{width:15px; height:15px; margin:0 7px 0 0; vertical-align:middle; cursor:pointer; flex:none}
