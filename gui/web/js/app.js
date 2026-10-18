@@ -818,7 +818,7 @@ async function captureToEntry(r) {
     combo: w >= 0 ? (ST.active[w] || '') : '',
     fsmId: fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -865,7 +865,7 @@ async function addWemRecord(r) {
     name: wemSeq(r) || wemBank(r) || ('media ' + media), weaponType: w, combo,
     media: media, bank: r.bank || '', fsmId: -1, fsmTarget: -1, group: '', stop: false,
     lmt: [], lmtAny: false,   // 不限不勾选：wem 条目可以填 LMT 作为附加条件
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -968,7 +968,7 @@ const JUDGE_FALLBACK = [
 function blankEntry() {
   return { name: '', weaponType: ST.weaponFilter >= 0 ? ST.weaponFilter : -1, combo: '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [] };
 }
@@ -1026,6 +1026,7 @@ function fillEditor() {
   $('#edGroup').value = e.group || '';
   $('#edFsmTarget').value = e.fsmTarget;
   $('#edStop').checked = !!e.stop;
+  { const eb = document.querySelector('#edEnabled'); if (eb) { eb.checked = (e.enabled !== false); eb.onchange = () => { e.enabled = eb.checked; }; } }
 
   // 蓄力等级 / 蓄力派生 / 被下一段蓄力打断
   // （目前只对大剑开放：只有它的蓄力等级偏移已知 +0x2358；弓/锤待实测后再放开。
@@ -1519,7 +1520,7 @@ async function addFsmToCombo(row) {
     name: row.name || ('fsm ' + row.fsm), weaponType: row.weapon, combo,
     fsmId: row.fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -1786,7 +1787,7 @@ async function previewEntry(index, useDraft) {
     // useDraft=true 时直接预览编辑器里的草稿 → 改了没保存也能立刻听到
     const payload = (useDraft && ED.draft) ? { entry: ED.draft } : { index };
     const r = await Backend.call('entry.preview', payload);
-    toast('预览「' + (r.pool || '音效') + '」：' + r.count + ' 条', 'ok');
+    toast('预览「' + (r.pool || '音效') + '」：' + r.count + ' 条\n' + (r.files || []).join('\n'), 'ok');
   } catch (e) { toast('预览失败：' + (e.message || e), 'err'); }
 }
 

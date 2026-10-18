@@ -1214,6 +1214,7 @@ struct Attack
     Pool gaugePool[4];            // LS gauge pools, keyed by level 0..3
     Pool chargePool[4];           // 蓄力等级池（大剑/弓/锤），keyed by 蓄力段 0..3
     bool stop = false;            // Stop=1：命中这条时停止正在播放的音效（无音效条目）
+    bool enabled = true;          // Enabled=0：临时停用这条（配好但先不生效，用来单独听某一条）
     bool inMatch = false;         // edge latch: fire once per action (ungrouped entries)
     std::uint64_t lastTriggerMs = 0;  // 每条目独立防抖：以前是全局 gLastTrigger，
                                        // 导致"同一条件写多条只有第一条响"、"紧跟上一招的动作被吃掉"
@@ -2147,6 +2148,8 @@ void LoadConfig()
             cur.name = val;
         } else if (key == "Stop") {
             cur.stop = std::atoi(val.c_str()) != 0;   // Stop=1：命中即停止播放
+        } else if (key == "Enabled") {
+            cur.enabled = std::atoi(val.c_str()) != 0;
         } else if (key == "Group") {
             cur.group = val;
         } else if (key == "ChargeLevel") {
@@ -3277,6 +3280,8 @@ DWORD WINAPI WorkerProc(LPVOID)
 
                 // 去掉 HasSounds 的“基础匹配”：Stop 条目没有音效也要能匹配
                 // ★ 外加武器触发开关（默认全关）：该武器没勾 → 一律不匹配
+                // ★ 停用的条目一律不匹配（Enabled=0）
+                if (!e.enabled) continue;
                 const bool matchBase =
                     WeaponPermitted(e.weaponType, weapon) &&
                     (e.weaponType < 0 || e.weaponType == weapon) &&

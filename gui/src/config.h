@@ -42,6 +42,7 @@ struct SoundEntry {
     std::string group;          // 动作组（Group=）：同一招的多个触发条目填相同组名，
                                 // 整招只响一次且刃色在首个触发瞬间定格
     bool stop = false;          // Stop=1：命中这条时停止正在播放的音效（不需要音效）
+    bool enabled = true;      // Enabled=0：临时停用这条（配好但先不生效，方便单独听某一条）
     // ★ 蓄力等级条目（ChargeLevel=1/2/3）：这条专门负责"蓄到第 N 段"的音效。
     //   触发 = 蓄力升到该段的瞬间（边沿），仍受 Weapon/FSM/LMT 过滤 →
     //   同一段可以在不同招式/过渡里配不同音效（派生进度细分）。0 = 普通条目。

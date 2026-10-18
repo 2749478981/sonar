@@ -1120,6 +1120,7 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     v.set("bank", JVal(e.bank));
     v.set("group", JVal(e.group));
     v.set("stop", JVal(e.stop));
+    v.set("enabled", JVal(e.enabled));
     v.set("chargeLevel", JVal(e.chargeLevel));
     v.set("chargeCut", JVal(e.chargeCut));
 
@@ -1170,6 +1171,7 @@ SoundEntry EntryFromJson(const JVal& v, const std::vector<std::string>& allowedC
     e.name = Trim(v.optStr("name"));
     e.group = Trim(v.optStr("group"));
     e.stop = v.optBool("stop", false);
+    e.enabled = v.optBool("enabled", true);
     e.chargeLevel = v.optInt("chargeLevel", 0);
     if (e.chargeLevel < 0 || e.chargeLevel > 3) e.chargeLevel = 0;
     e.chargeCut = v.optBool("chargeCut", false);
@@ -3929,6 +3931,21 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             return OkJson(d);
         }
 
+
+        // 单条目启用/停用（列表里勾一下就切换；停用的条目游戏里不触发）
+        if (method == "entries.setEnabled") {
+            const int idx = p.optInt("index", -1);
+            if (idx < 0 || idx >= (int)im->cfg.entries.size()) return ErrJson("条目不存在");
+            im->cfg.entries[idx].enabled = p.optBool("on", true);
+            im->dirty = true;
+            (void)SaveConfig(im->cfg.path, im->cfg);   // 立刻落盘：这是个开关，别让用户忘了保存
+            JVal d = JVal::obj();
+            d.set("enabled", JVal(im->cfg.entries[idx].enabled));
+            d.set("dirty", JVal(im->dirty));
+            im->SetStatus(im->cfg.entries[idx].enabled ? "已启用该条目" : "已停用该条目（游戏里不触发）");
+            d.set("status", JVal(im->status));
+            return OkJson(d);
+        }
         if (method == "entries.save") {
             const JVal* je = p.find("entry");
             if (!je || !je->isObj()) return ErrJson("缺少 entry 对象");
@@ -4572,7 +4589,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 if (gain < 0.0f) gain = 0.0f;
                 if (gain > 2.0f) gain = 2.0f;
                 PlayPreviewFile(full, gain, sp.delay > 0 ? (unsigned)sp.delay : 0, false);
-                names.push(JVal(ToSlash(sp.path)));
+                names.push(JVal(ToSlash(sp.path) + "  (延时 " + std::to_string(sp.delay) + "ms / 音量 " + std::to_string(sp.vol) + (sp.fixed ? " / 固定" : "") + ")"));
             }
             im->SetStatus("预览条目「" + (e.name.empty() ? std::string("(未命名)") : e.name)
                           + "」的 " + label + "：共播 " + std::to_string(picked.size()) + " 条");
