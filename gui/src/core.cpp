@@ -1358,6 +1358,7 @@ struct Core::Impl {
     std::string exeDir;          // 本模块目录（含结尾反斜杠）
     std::string gameIniPath;     // 游戏实际读取的那份 ini（能定位到才有值）
     std::string uiPath;          // <exeDir>Sonar_UI.json
+    std::vector<std::string> soundLib;   // ★ 音效库：只在内存里，退出即清空（临时试听用）
 
     UiPrefs prefs;
 
@@ -4356,28 +4357,10 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             return OkJson(d);
         }
 
-
         // ---------------- 音效库（导入文件夹 → 点一下试听 → 条目也能直接从库里选）----------------
-        //  存 exeDir\Sonar_SoundLib.json，只记绝对路径列表，不碰任何条目。
+        //  ★ 只存在内存里：退出即清空，不落盘、不留文件（用户要的就是"临时试听用"）。
         if (method == "lib.list" || method == "lib.import" || method == "lib.clear" || method == "lib.remove") {
-            const std::string libFile = im->exeDir + "Sonar_SoundLib.json";
-            std::vector<std::string> lib;
-            {   // 读现有库
-                std::string txt;
-                if (FsRead(libFile, txt)) {
-                    JsonParser jp(txt);
-                    JVal v;
-                    if (jp.parse(v)) {
-                        const JVal* a = v.find("files");
-                        if (!a && v.isArr()) a = &v;
-                        if (a && a->isArr())
-                            for (std::size_t i = 0; i < a->a.size(); ++i) {
-                                const std::string p = a->a[i].asStr();
-                                if (!p.empty()) lib.push_back(p);
-                            }
-                    }
-                }
-            }
+            std::vector<std::string>& lib = im->soundLib;
 
             if (method == "lib.import") {
                 std::string dir = Trim(p.optStr("dir"));
@@ -4388,7 +4371,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                     d.set("count", JVal((int)lib.size()));
                     return OkJson(d);
                 }
-                // 递归收集音频文件（限制深度，避免有人选到盘符根目录卡死）
+                // 递归收集音频文件（限制深度/数量，避免有人选到盘符根目录卡死）
                 std::vector<std::wstring> stack;
                 stack.push_back(Utf8ToWide(dir));
                 int added = 0, scanned = 0;
@@ -4421,28 +4404,17 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                     } while (::FindNextFileW(h, &fd));
                     ::FindClose(h);
                 }
-                // 落盘
-                JVal arr = JVal::arr();
-                for (std::size_t i = 0; i < lib.size(); ++i) arr.push(JVal(lib[i]));
-                JVal root = JVal::obj();
-                root.set("files", arr);
-                const std::string out = JsonDump(root);
-                WriteWideFile(Utf8ToWide(libFile), (const void*)out.data(), out.size());
                 JVal d = JVal::obj();
                 d.set("cancelled", JVal(false));
                 d.set("added", JVal(added));
                 d.set("count", JVal((int)lib.size()));
                 d.set("dir", JVal(ToSlash(dir)));
-                im->SetStatus("音效库：本次新增 " + std::to_string(added) + " 个，共 " + std::to_string(lib.size()) + " 个");
+                im->SetStatus("音效库（临时）：本次新增 " + std::to_string(added) + " 个，共 " + std::to_string(lib.size()) + " 个");
                 return OkJson(d);
             }
 
             if (method == "lib.clear") {
                 lib.clear();
-                JVal root = JVal::obj();
-                root.set("files", JVal::arr());
-                const std::string out = JsonDump(root);
-                WriteWideFile(Utf8ToWide(libFile), (const void*)out.data(), out.size());
                 JVal d = JVal::obj();
                 d.set("count", JVal(0));
                 return OkJson(d);
@@ -4453,12 +4425,6 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 std::vector<std::string> keep;
                 for (std::size_t i = 0; i < lib.size(); ++i) if (lib[i] != path) keep.push_back(lib[i]);
                 lib.swap(keep);
-                JVal arr = JVal::arr();
-                for (std::size_t i = 0; i < lib.size(); ++i) arr.push(JVal(lib[i]));
-                JVal root = JVal::obj();
-                root.set("files", arr);
-                const std::string out = JsonDump(root);
-                WriteWideFile(Utf8ToWide(libFile), (const void*)out.data(), out.size());
                 JVal d = JVal::obj();
                 d.set("count", JVal((int)lib.size()));
                 return OkJson(d);
