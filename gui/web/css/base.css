@@ -782,3 +782,6 @@ html.overlay-mode .ovbar .ovx:hover{background:rgba(255,255,255,.25)}
 .bankhdr-right .note{margin:0}
 /* 条目列表里的「蓄力N段」徽标（与 wem 徽标同风格，颜色区分） */
 .badge.charge{background:var(--c-purple, #a06bff); color:#fff}
+/* 已按武器筛选时整列隐藏「武器」：表头和单元格一起，避免列错位 */
+#entryTable.hideweapon th:nth-child(2),
+#entryTable.hideweapon td:nth-child(2){display:none}

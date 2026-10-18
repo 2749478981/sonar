@@ -552,8 +552,9 @@ function applyFilter() {
 // 左侧已经选定某把武器时，列表里的「武器」列是冗余的 → 隐藏它腾出空间
 function hideWeaponCol() { return (typeof ST !== 'undefined') && ST.weaponFilter >= 0; }
 function syncWeaponCol() {
-  const th = document.getElementById('thWeapon');
-  if (th) th.hidden = hideWeaponCol();
+  // ★ 用表格 class 整列隐藏：表头和单元格一起消失，不会出现'表头6列、行5列'的错位
+  const t = document.getElementById('entryTable');
+  if (t) t.classList.toggle('hideweapon', hideWeaponCol());
 }
 
 function renderTable() {
@@ -608,7 +609,7 @@ function renderTable() {
         hint = '（同一动作会同时播放这几条；想合并成一条可点工具栏「合并同条件」）';
       }
       tb.appendChild(h('tr', { class: 'grp' },
-        h('td', { colspan: hideWeaponCol() ? '5' : '6' },
+        h('td', { colspan: '6' },
           h('span', { class: 'grptag', text: title }),
           h('span', { class: 'dim', text: hint }))));
     }
@@ -628,7 +629,7 @@ function renderTable() {
         (e.chargeLevel > 0) ? h('span', { class: 'badge charge', text: '蓄力' + e.chargeLevel + '段',
           style: 'margin-left:7px', title: '蓄力条目：蓄力涨到第 ' + e.chargeLevel + ' 段的瞬间立即播放' }) : null,
         inCombo ? null : h('span', { class: 'badge warn', text: '未激活', style: 'margin-left:7px' })),
-      hideWeaponCol() ? null : h('td', {}, wInline(e.weaponType)),   // 已按武器筛选时不必再显示武器
+      h('td', {}, wInline(e.weaponType)),   // 武器列由表格 class 整体隐藏（表头+单元格一起，避免错位）
       // WEM 视图：WEM id + 序号（nbnk 内第几个）；派生视图：LMT + FSMId
       isWem
         ? h('td', { class: 'lmt' }, h('span', { class: 'mono', text: String(e.media) }))
@@ -1087,10 +1088,12 @@ function fillEditor() {
   }
 
   // 武器下拉
-  // 左侧已选定武器时，编辑器的「武器」下拉是冗余的 → 隐藏并固定为它
-  const wRow = (ws && ws.closest) ? ws.closest('.field') : null;
-  if (wRow) wRow.hidden = (ST.weaponFilter >= 0);
   const ws = $('#edWeapon');
+  // 左侧已选定武器时，编辑器的「武器」下拉是冗余的 → 隐藏它（新条目会自动用当前武器）
+  {
+    const wRow = (ws && ws.closest) ? ws.closest('.field') : null;
+    if (wRow) wRow.hidden = (ST.weaponFilter >= 0);
+  }
   ws.innerHTML = '';
   ws.appendChild(h('option', { value: '-1' }, '任意 (-1)'));
   ST.weapons.forEach(w => ws.appendChild(
