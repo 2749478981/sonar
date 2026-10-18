@@ -47,6 +47,7 @@
   <div class="opts box">
     <button data-act="win.fsm">FSM 查询</button>
     <button data-act="win.ids">上传ID</button>
+    <button data-act="win.lib" title="导入一个文件夹的音效进来试听（不会加到条目），条目加音效时也能直接从库里选">音效库</button>
     <button data-act="win.hot" title="游戏内快捷键绑定与聊天框指令说明">热键指令</button>
     <button data-act="cfg.mergeOld">合并旧版ini</button>
     <span class="sep"></span>
@@ -421,6 +422,31 @@
         </table>
       </div>
       <div class="cfoot" id="nameLibFoot"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 音效库 ================= -->
+<div class="modal" id="mLib">
+  <div class="mbox box">
+    <div class="mhead"><span class="t" id="libTitle">音效库</span><button data-act="m.close">关闭</button></div>
+    <div class="mbody">
+      <p class="note" id="libHint">
+        把某个文件夹里的音效<b>导入进来</b>（不会加到任何条目），然后<b>点一下就能听</b> ——
+        不用切到别的播放器一个个试；点下一条会自动打断上一条。
+      </p>
+      <div class="btnrow">
+        <button class="primary" data-act="lib.import">导入文件夹…</button>
+        <input type="text" id="libSearch" placeholder="搜索文件名…" style="flex:1;min-width:160px">
+        <button data-act="lib.clear">清空</button>
+        <button id="libAddBtn" data-act="lib.addPicked" hidden>加入所选（<span id="libPickCount">0</span>）</button>
+      </div>
+      <div class="paths" id="libPaths"></div>
+      <div class="tablewrap small" style="max-height:46vh">
+        <table><thead><tr><th>音效</th><th style="width:120px">位置</th><th class="right" style="width:110px">操作</th></tr></thead>
+          <tbody id="libBody"></tbody></table>
+      </div>
+      <div class="note" id="libEmpty">还没有音效：点「导入文件夹…」把某个文件夹里的 wav/mp3/ogg/flac 收进来。</div>
     </div>
   </div>
 </div>

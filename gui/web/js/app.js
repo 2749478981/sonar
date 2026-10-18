@@ -1364,7 +1364,10 @@ function buildPools(box, e) {
       });
       fillPools();
     } }, arr.length ? '添加音效' : '选择音效');
-    wrap.appendChild(h('div', { class: 'addrow' }, browse));
+    // ★ 也能直接从「音效库」里选：库里点一下就能试听，选好一起加进来
+    const fromLib = h('button', { title: '从「音效库」里挑（可先点着试听，再勾选加入）',
+      onclick: () => openLib(arr) }, '从音效库选');
+    wrap.appendChild(h('div', { class: 'addrow' }, browse, fromLib));
   };
 
   $('#edDefHead').textContent = isLS ? '默认音效（任意刃时）' : '默认音效';
@@ -1682,6 +1685,100 @@ function refreshUpdate() {
 /* ===========================================================================
    工具栏动作
    =========================================================================== */
+/* ===========================================================================
+   音效库：导入文件夹 → 点一下试听（打断上一条）→ 条目加音效时也能直接选
+   =========================================================================== */
+const LIB = { files: [], filter: '', playing: '', pickMode: null, picked: new Set() };
+
+function libBase(p) { return String(p || '').split(/[\\/]/).pop(); }
+function libDir(p) {
+  const s = String(p || '');
+  const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
+  return i > 0 ? s.slice(0, i) : s;
+}
+
+async function libLoad() {
+  try {
+    const r = await Backend.call('lib.list', {});
+    LIB.files = r.files || [];
+  } catch (e) { LIB.files = []; }
+}
+
+function libRender() {
+  const body = $('#libBody'), empty = $('#libEmpty'), paths = $('#libPaths');
+  if (!body) return;
+  const q = (LIB.filter || '').toLowerCase();
+  const list = LIB.files.filter(p => !q || libBase(p).toLowerCase().includes(q) || p.toLowerCase().includes(q));
+  body.innerHTML = '';
+  if (empty) empty.hidden = LIB.files.length > 0;
+  if (paths) paths.textContent = LIB.files.length ? `共 ${LIB.files.length} 个音效` : '';
+
+  // 选择模式（从条目里点「从音效库选」进来的）：显示勾选 + 加入按钮
+  const addBtn = $('#libAddBtn');
+  if (addBtn) addBtn.hidden = !LIB.pickMode;
+  const pc = $('#libPickCount');
+  if (pc) pc.textContent = String(LIB.picked.size);
+  const title = $('#libTitle');
+  if (title) title.textContent = LIB.pickMode ? '从音效库选音效' : '音效库';
+
+  list.forEach(p => {
+    const isPlaying = (LIB.playing === p);
+    const picked = LIB.picked.has(p);
+    const tr = h('tr', {
+      class: isPlaying ? 'sel' : '',
+      title: p,
+      style: 'cursor:pointer',
+    },
+      h('td', {}, h('span', { class: 'nm', text: libBase(p) }),
+        isPlaying ? h('span', { class: 'badge', text: '▶ 播放中', style: 'margin-left:7px' }) : null),
+      h('td', { class: 'dim', style: 'font-size:11px' }, libDir(p)),
+      h('td', { class: 'right' }, h('div', { class: 'acts' },
+        h('button', { onclick: ev => { ev.stopPropagation(); libPlay(p); } }, isPlaying ? '重播' : '试听'),
+        LIB.pickMode
+          ? h('button', { onclick: ev => { ev.stopPropagation(); libTogglePick(p); } }, picked ? '取消' : '选择')
+          : h('button', { onclick: ev => { ev.stopPropagation(); libRemove(p); } }, '移除'))));
+    // 整行点一下 = 试听（下一条自动打断上一条）
+    tr.onclick = () => { if (LIB.pickMode) libTogglePick(p); else libPlay(p); };
+    body.appendChild(tr);
+  });
+}
+
+async function libPlay(p) {
+  LIB.playing = p;
+  libRender();
+  try {
+    await Backend.call('sound.preview', { path: p, vol: 100, delay: 0 });
+  } catch (e) {
+    LIB.playing = '';
+    libRender();
+    toast('试听失败：' + (e.message || e), 'err');
+  }
+}
+
+function libTogglePick(p) {
+  if (LIB.picked.has(p)) LIB.picked.delete(p); else LIB.picked.add(p);
+  libRender();
+}
+
+async function libRemove(p) {
+  try {
+    const r = await Backend.call('lib.remove', { path: p });
+    LIB.files = LIB.files.filter(x => x !== p);
+    if (LIB.playing === p) LIB.playing = '';
+    libRender();
+    toast('已移除（库内剩 ' + (r.count || 0) + ' 个）');
+  } catch (e) { toast('移除失败：' + e.message, 'err'); }
+}
+
+// 打开音效库；pickMode 非空时是"从库里给某个池子选音效"
+async function openLib(pickMode) {
+  LIB.pickMode = pickMode || null;
+  LIB.picked = new Set();
+  await libLoad();
+  libRender();
+  openModal('#mLib');
+  if (!LIB.files.length && !pickMode) toast('点「导入文件夹…」把音效收进来', 'ok');
+}
 const ACTIONS = {
   'cfg.save':   async () => {
     const r = await Backend.call('config.save', {});
@@ -1856,6 +1953,39 @@ const ACTIONS = {
   'win.fsm':    async () => { openModal('#mFsm'); await runFsmSearch(); },
   'win.hot':    async () => { openModal('#mHot'); await refreshHotkeys(); },
   'win.ids':    async () => { openModal('#mIds'); await refreshIds(); },
+  'win.lib':    () => openLib(null),
+
+  // ---- 音效库 ----
+  'lib.import': async () => {
+    const r = await Backend.call('lib.import', {});
+    if (r.cancelled) return;
+    await libLoad();
+    libRender();
+    toast('已导入 ' + r.added + ' 个音效（库内共 ' + r.count + ' 个）：点一下就能试听', 'ok');
+  },
+  'lib.clear': async () => {
+    if (!LIB.files.length) return;
+    const go = await confirmBox({ title: '清空音效库', danger: true, okText: '清空',
+      message: '把音效库里的 ' + LIB.files.length + ' 个音效移除？\n（只是不在这里列出来，不会删你的文件，也不影响已配好的条目）' });
+    if (!go) return;
+    await Backend.call('lib.clear', {});
+    LIB.files = []; LIB.picked = new Set(); LIB.playing = '';
+    libRender();
+    toast('音效库已清空');
+  },
+  'lib.addPicked': async () => {
+    const target = LIB.pickMode;
+    if (!target || !LIB.picked.size) { toast('先点几行选中音效', 'err'); return; }
+    const paths = Array.from(LIB.picked);
+    target.forEach(p => {
+      if (!target.some(s => s.path === p))
+        target.push({ path: p, delay: 0, vol: 100, fixed: false, cdMs: 0, playLock: false });
+    });
+    toast('已加入 ' + paths.length + ' 个音效', 'ok');
+    LIB.pickMode = null; LIB.picked = new Set();
+    closeModals();
+    fillPools();
+  },
   'overlay.toggle': async () => {
     const r = await Backend.call('overlay.toggle', {});
     const v = r && r.data ? r.data.visible : false;

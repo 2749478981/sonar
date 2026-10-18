@@ -920,6 +920,7 @@ DWORD WINAPI PvWorker(LPVOID param) {
 }
 
 void PlayPreviewFile(const std::wstring& path, float gain, unsigned delayMs) {
+    StopAllPreview();   // ★ 试听打断上一条：点下一条时先停掉正在播的
     PvCtx* c = new PvCtx();
     c->path = path;
     c->gain = gain;
@@ -4355,6 +4356,122 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             return OkJson(d);
         }
 
+
+        // ---------------- 音效库（导入文件夹 → 点一下试听 → 条目也能直接从库里选）----------------
+        //  存 exeDir\Sonar_SoundLib.json，只记绝对路径列表，不碰任何条目。
+        if (method == "lib.list" || method == "lib.import" || method == "lib.clear" || method == "lib.remove") {
+            const std::string libFile = im->exeDir + "Sonar_SoundLib.json";
+            std::vector<std::string> lib;
+            {   // 读现有库
+                std::string txt;
+                if (FsRead(libFile, txt)) {
+                    JsonParser jp(txt);
+                    JVal v;
+                    if (jp.parse(v)) {
+                        const JVal* a = v.find("files");
+                        if (!a && v.isArr()) a = &v;
+                        if (a && a->isArr())
+                            for (std::size_t i = 0; i < a->a.size(); ++i) {
+                                const std::string p = a->a[i].asStr();
+                                if (!p.empty()) lib.push_back(p);
+                            }
+                    }
+                }
+            }
+
+            if (method == "lib.import") {
+                std::string dir = Trim(p.optStr("dir"));
+                if (dir.empty()) dir = PickFolder(owner, Utf8ToWide(im->exeDir));
+                if (dir.empty()) {
+                    JVal d = JVal::obj();
+                    d.set("cancelled", JVal(true));
+                    d.set("count", JVal((int)lib.size()));
+                    return OkJson(d);
+                }
+                // 递归收集音频文件（限制深度，避免有人选到盘符根目录卡死）
+                std::vector<std::wstring> stack;
+                stack.push_back(Utf8ToWide(dir));
+                int added = 0, scanned = 0;
+                while (!stack.empty() && scanned < 20000) {
+                    const std::wstring cur = stack.back();
+                    stack.pop_back();
+                    WIN32_FIND_DATAW fd{};
+                    HANDLE h = ::FindFirstFileW((cur + L"\\*").c_str(), &fd);
+                    if (h == INVALID_HANDLE_VALUE) continue;
+                    do {
+                        const std::wstring nm = fd.cFileName;
+                        if (nm == L"." || nm == L"..") continue;
+                        const std::wstring full = cur + L"\\" + nm;
+                        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                            if (stack.size() < 200) stack.push_back(full);
+                            continue;
+                        }
+                        ++scanned;
+                        std::wstring ext = nm;
+                        const std::size_t dot = ext.find_last_of(L'.');
+                        if (dot == std::wstring::npos) continue;
+                        ext = ext.substr(dot);
+                        for (std::size_t k = 0; k < ext.size(); ++k) ext[k] = (wchar_t)towlower(ext[k]);
+                        if (ext != L".wav" && ext != L".mp3" && ext != L".ogg" && ext != L".flac" &&
+                            ext != L".wem" && ext != L".m4a" && ext != L".aac" && ext != L".opus") continue;
+                        const std::string abs = ToSlash(Utf8FromWide(full));
+                        bool dup = false;
+                        for (std::size_t k = 0; k < lib.size(); ++k) if (lib[k] == abs) { dup = true; break; }
+                        if (!dup) { lib.push_back(abs); ++added; }
+                    } while (::FindNextFileW(h, &fd));
+                    ::FindClose(h);
+                }
+                // 落盘
+                JVal arr = JVal::arr();
+                for (std::size_t i = 0; i < lib.size(); ++i) arr.push(JVal(lib[i]));
+                JVal root = JVal::obj();
+                root.set("files", arr);
+                const std::string out = JsonDump(root);
+                WriteWideFile(Utf8ToWide(libFile), (const void*)out.data(), out.size());
+                JVal d = JVal::obj();
+                d.set("cancelled", JVal(false));
+                d.set("added", JVal(added));
+                d.set("count", JVal((int)lib.size()));
+                d.set("dir", JVal(ToSlash(dir)));
+                im->SetStatus("音效库：本次新增 " + std::to_string(added) + " 个，共 " + std::to_string(lib.size()) + " 个");
+                return OkJson(d);
+            }
+
+            if (method == "lib.clear") {
+                lib.clear();
+                JVal root = JVal::obj();
+                root.set("files", JVal::arr());
+                const std::string out = JsonDump(root);
+                WriteWideFile(Utf8ToWide(libFile), (const void*)out.data(), out.size());
+                JVal d = JVal::obj();
+                d.set("count", JVal(0));
+                return OkJson(d);
+            }
+
+            if (method == "lib.remove") {
+                const std::string path = ToSlash(Trim(p.optStr("path")));
+                std::vector<std::string> keep;
+                for (std::size_t i = 0; i < lib.size(); ++i) if (lib[i] != path) keep.push_back(lib[i]);
+                lib.swap(keep);
+                JVal arr = JVal::arr();
+                for (std::size_t i = 0; i < lib.size(); ++i) arr.push(JVal(lib[i]));
+                JVal root = JVal::obj();
+                root.set("files", arr);
+                const std::string out = JsonDump(root);
+                WriteWideFile(Utf8ToWide(libFile), (const void*)out.data(), out.size());
+                JVal d = JVal::obj();
+                d.set("count", JVal((int)lib.size()));
+                return OkJson(d);
+            }
+
+            // lib.list
+            JVal arr = JVal::arr();
+            for (std::size_t i = 0; i < lib.size(); ++i) arr.push(JVal(lib[i]));
+            JVal d = JVal::obj();
+            d.set("files", arr);
+            d.set("count", JVal((int)lib.size()));
+            return OkJson(d);
+        }
         if (method == "sound.preview") {
             const std::string rel = p.optStr("path");
             if (rel.empty()) return ErrJson("缺少 path");
