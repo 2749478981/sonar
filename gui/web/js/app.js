@@ -856,6 +856,7 @@ async function captureToEntry(r) {
   if (hit >= 0) {
     const idx = ST.entries[hit].index != null ? ST.entries[hit].index : hit;
     if (overlayMode()) { toast('已有这个动作的条目，请回主界面编辑'); return; }
+    openEditor(idx);   // ★ 打开那一条的编辑器（之前这行丢了，只弹提示不打开）
     toast('已有这个动作的条目，已打开编辑', 'ok');
     return;
   }
@@ -905,6 +906,7 @@ async function addWemRecord(r) {
   if (hit >= 0) {
     const idx = ST.entries[hit].index != null ? ST.entries[hit].index : hit;
     if (overlayMode()) { toast('已添加到 GUI 条目列表，请回主界面编辑'); return; }
+    openEditor(idx);   // ★ 打开已有条目的编辑器（之前这行也丢了）
     toast('当前组合已有这个 wem，已打开编辑', 'ok');
     return;
   }
