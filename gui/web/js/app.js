@@ -225,6 +225,21 @@ function confirmBox({ title, message, okText, danger, input, placeholder }) {
 /* ===========================================================================
    应用状态
    =========================================================================== */
+// ★ 全局 JS 错误捕获：界面某处抛异常时（例如打不开编辑器）把原因记下来，
+//   自检会把最后一条错误上报，排查不用靠猜。
+window.__jsErr = "";
+window.addEventListener('error', ev => {
+  try {
+    window.__jsErr = (ev.message || 'error') + ' @' + (ev.filename || '').split('/').pop() + ':' + (ev.lineno || 0);
+  } catch (e) {}
+});
+window.addEventListener('unhandledrejection', ev => {
+  try {
+    const r = ev.reason;
+    window.__jsErr = 'unhandled: ' + ((r && (r.message || r)) || '');
+  } catch (e) {}
+});
+
 const ST = {
   ready: false,
   theme: 'clean-light',

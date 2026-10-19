@@ -517,6 +517,7 @@ void ProbePage() {
         L"var filt=document.querySelector('.capHost .capfilter');"
         L"var et=document.getElementById('entryTable');var etc=et?(function(){var r=et.querySelector('thead tr:not([hidden])');return r?r.children.length:-1;})():-1;"
         L"var ehw=et?(et.className.indexOf('hideweapon')>=0?1:0):-1;"
+        L"var jse=(typeof window.__jsErr==='string'?window.__jsErr:'');"
         L"var erc=et?(function(){var r=et.querySelector('tbody tr:not(.grp)');return r?r.children.length:-1;})():-1;"
         L"var dw=document.getElementById('dllWarn');"
         L"var dwS=dw?(dw.hidden?'hidden':'shown'):'missing';"
@@ -549,7 +550,7 @@ void ProbePage() {
         L"logoOk:(logo?logo.naturalWidth>0:null),"
         L"capType:(typeof Capture),api:apiInfo,hosts:hosts.length,capRows:cm+'/'+cb,view:view,"
         L"layout:layout,wemView:wemView,capStat:(stat?stat.textContent:''),capFilter:(filt?filt.textContent:''),"
-        L"capText:ct,dllWarn:dwS,thCols:etc,rowCols:erc,weaponColHidden:ehw,status:(st?st.textContent:'')"
+        L"capText:ct,dllWarn:dwS,thCols:etc,rowCols:erc,weaponColHidden:ehw,jsErr:jse,status:(st?st.textContent:'')"
         L"});})()",
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
             [](HRESULT, LPCWSTR json) -> HRESULT {
