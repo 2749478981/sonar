@@ -3949,10 +3949,15 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             im->cfg.entries[idx].enabled = p.optBool("on", true);
             im->dirty = true;
             (void)SaveConfig(im->cfg.path, im->cfg);   // 立刻落盘：这是个开关，别让用户忘了保存
+            // ★ 还要通知游戏内插件重载：不然它还在用内存里的旧配置，
+            //   表现就是"停用了却照样触发"（实测反馈）。和工具栏「重载游戏配置」同一个机制。
+            FsWrite(im->BaseDir() + "_wse_reload.flag", "1");
             JVal d = JVal::obj();
             d.set("enabled", JVal(im->cfg.entries[idx].enabled));
             d.set("dirty", JVal(im->dirty));
-            im->SetStatus(im->cfg.entries[idx].enabled ? "已启用该条目" : "已停用该条目（游戏里不触发）");
+            im->SetStatus(im->cfg.entries[idx].enabled
+                          ? "已启用该条目（已让游戏重载配置）"
+                          : "已停用该条目（已让游戏重载配置，游戏里不再触发）");
             d.set("status", JVal(im->status));
             return OkJson(d);
         }
