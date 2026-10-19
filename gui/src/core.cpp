@@ -3949,6 +3949,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             im->cfg.entries[idx].enabled = p.optBool("on", true);
             im->dirty = true;
             (void)SaveConfig(im->cfg.path, im->cfg);   // 立刻落盘：这是个开关，别让用户忘了保存
+            im->dirty = false;                          // 已经写盘了 → 不留"未保存"状态
             // ★ 还要通知游戏内插件重载：不然它还在用内存里的旧配置，
             //   表现就是"停用了却照样触发"（实测反馈）。和工具栏「重载游戏配置」同一个机制。
             FsWrite(im->BaseDir() + "_wse_reload.flag", "1");

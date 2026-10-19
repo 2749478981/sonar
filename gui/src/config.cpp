@@ -89,10 +89,8 @@ void AppendSpecs(PoolSpec& pool, const std::string& value,
         SoundSpec sp;
         ParseSpec(tok, sp);
         if (sp.path.empty()) continue;
-        bool dup = false;
-        for (const auto& ex : pool.specs)
-            if (ex.path == sp.path) { dup = true; break; }
-        if (dup) continue;
+        // ★ 不去重：允许同一个文件在一个池里出现多次（不同延时各播一次 / 随机权重）。
+        //   以前这里按路径去重，导致"设置了两条一样的，重启 GUI 后只剩一条"（实测反馈）。
         const bool wasPlain = (tok.find('|') == std::string::npos);
         const int idx = (int)pool.specs.size();
         pool.specs.push_back(sp);
