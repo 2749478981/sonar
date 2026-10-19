@@ -363,6 +363,10 @@ bool LoadConfig(const std::string& path, Config& cfg) {
             cur.stop = std::atoi(val.c_str()) != 0;
         } else if (key == "Enabled") {
             cur.enabled = std::atoi(val.c_str()) != 0;
+        } else if (key == "PrevFsm") {
+            cur.prevFsm = std::atoi(val.c_str());
+        } else if (key == "PrevLmt") {
+            cur.prevLmt = std::atoi(val.c_str());
         } else if (key == "ChargeLevel") {
             const int cl = std::atoi(val.c_str());
             cur.chargeLevel = (cl >= 1 && cl <= 3) ? cl : 0;
@@ -474,6 +478,8 @@ static void WriteEntry(const SoundEntry& e, int n, std::string& o) {
     if (!e.group.empty()) o += "Group=" + e.group + "\r\n";
     if (e.stop) o += "Stop=1\r\n";
     if (!e.enabled) o += "Enabled=0\r\n";
+    if (e.prevFsm >= 0) o += "PrevFsm=" + std::to_string(e.prevFsm) + "\r\n";
+    if (e.prevLmt >= 0) o += "PrevLmt=" + std::to_string(e.prevLmt) + "\r\n";
     if (e.chargeLevel > 0) o += "ChargeLevel=" + std::to_string(e.chargeLevel) + "\r\n";
     if (e.chargeCut) o += "ChargeCut=1\r\n";
     o += "WeaponType=" + std::to_string(e.weaponType) + "\r\n";

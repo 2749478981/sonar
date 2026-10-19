@@ -866,7 +866,7 @@ async function captureToEntry(r) {
     combo: w >= 0 ? (ST.active[w] || '') : '',
     fsmId: fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -914,7 +914,7 @@ async function addWemRecord(r) {
     name: wemSeq(r) || wemBank(r) || ('media ' + media), weaponType: w, combo,
     media: media, bank: r.bank || '', fsmId: -1, fsmTarget: -1, group: '', stop: false,
     lmt: [], lmtAny: false,   // 不限不勾选：wem 条目可以填 LMT 作为附加条件
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -1017,7 +1017,7 @@ const JUDGE_FALLBACK = [
 function blankEntry() {
   return { name: '', weaponType: ST.weaponFilter >= 0 ? ST.weaponFilter : -1, combo: '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [] };
 }
@@ -1030,6 +1030,7 @@ async function openEditor(index) {
     e = r.entry;
   }
   ED.open = true; ED.index = index == null ? null : index;
+  ED.groupOpen = false;   // 每次打开编辑器，动作组默认折叠
   ED.draft = e;
   // 有条件但没记预设（老配置）：下拉显示"自定义"，否则看起来像"不判定"（用户会以为设置丢了）
   if (!e.judgePreset && (e.conds || []).length) e.judgePreset = 5;
@@ -1072,6 +1073,17 @@ function fillEditor() {
   $('#edLmt').value = (e.lmt || []).join(',');
   $('#edAdv').checked = ED.adv;
   $('#edAdvBox').hidden = !ED.adv;
+  // 动作组默认折叠（用得少）；已经填了组名的条目自动展开
+  {
+    const gb = document.querySelector('#edGroupBox');
+    const gk = document.querySelector('#edGroupOpen');
+    const hasGroup = !!(e.group && e.group.length);
+    if (gb) gb.hidden = !(hasGroup || (ED.groupOpen === true));
+    if (gk) {
+      gk.checked = hasGroup || (ED.groupOpen === true);
+      gk.onchange = () => { ED.groupOpen = gk.checked; if (gb) gb.hidden = !gk.checked; };
+    }
+  }
   $('#edGroup').value = e.group || '';
   $('#edFsmTarget').value = e.fsmTarget;
   $('#edStop').checked = !!e.stop;
@@ -1178,6 +1190,8 @@ function fillEditor() {
   };
   $('#edAdv').onchange = ev => { ED.adv = ev.target.checked; $('#edAdvBox').hidden = !ED.adv; fillPools(); };
   $('#edGroup').oninput = ev => e.group = ev.target.value;
+  { const pf = document.querySelector('#edPrevFsm'); if (pf) { pf.value = (e.prevFsm != null ? e.prevFsm : -1); pf.oninput = () => { const v = parseInt(pf.value, 10); e.prevFsm = isNaN(v) ? -1 : v; }; } }
+  { const pl = document.querySelector('#edPrevLmt'); if (pl) { pl.value = (e.prevLmt != null ? e.prevLmt : -1); pl.oninput = () => { const v = parseInt(pl.value, 10); e.prevLmt = isNaN(v) ? -1 : v; }; } }
   $('#edFsmTarget').oninput = ev => e.fsmTarget = parseInt(ev.target.value, 10);
   $('#edStop').onchange = ev => e.stop = ev.target.checked;
   $('#edDelay').oninput = ev => e.checkDelayMs = parseInt(ev.target.value, 10) || 0;
@@ -1574,7 +1588,7 @@ async function addFsmToCombo(row) {
     name: row.name || ('fsm ' + row.fsm), weaponType: row.weapon, combo,
     fsmId: row.fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };

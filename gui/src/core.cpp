@@ -1131,6 +1131,8 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     v.set("group", JVal(e.group));
     v.set("stop", JVal(e.stop));
     v.set("enabled", JVal(e.enabled));
+    v.set("prevFsm", JVal(e.prevFsm));
+    v.set("prevLmt", JVal(e.prevLmt));
     v.set("chargeLevel", JVal(e.chargeLevel));
     v.set("chargeCut", JVal(e.chargeCut));
 
@@ -1182,6 +1184,8 @@ SoundEntry EntryFromJson(const JVal& v, const std::vector<std::string>& allowedC
     e.group = Trim(v.optStr("group"));
     e.stop = v.optBool("stop", false);
     e.enabled = v.optBool("enabled", true);
+    e.prevFsm = v.optInt("prevFsm", -1);
+    e.prevLmt = v.optInt("prevLmt", -1);
     e.chargeLevel = v.optInt("chargeLevel", 0);
     if (e.chargeLevel < 0 || e.chargeLevel > 3) e.chargeLevel = 0;
     e.chargeCut = v.optBool("chargeCut", false);

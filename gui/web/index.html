@@ -270,13 +270,34 @@
     </div>
 
     <div id="edAdvBox" hidden>
-      <div class="field"><span>动作组</span><input type="text" id="edGroup" placeholder="留空 = 各自独立触发（推荐）"></div>
+      <!-- 动作组：用得少，默认折叠；填了内容会自动展开 -->
+      <div class="field"><span></span>
+        <label class="inline"><input type="checkbox" id="edGroupOpen"> 动作组（用得少，点开再填）</label>
+      </div>
+      <div id="edGroupBox" hidden>
+        <div class="field"><span>动作组</span><input type="text" id="edGroup" placeholder="留空 = 各自独立触发（推荐）"></div>
+        <div class="field hint">
+          <b>动作组是什么</b>：给「同一招的多个触发条目」填<b>同一个组名</b>（如都填 <code>气刃4</code>），
+          它们就<b>整招只响一次</b> —— 哪个条件先命中就播哪个，并且刃级/蓄力等状态在那一刻<b>定格</b>，
+          不会因为招式后段状态变了又响第二声。<br>
+          <b>什么时候要填</b>：一招生效分好几帧、或多条条目指向同一招时。<br>
+          <b>什么时候别填</b>：一招里你<b>故意</b>想让多段各响一声（比如三段斩每段一个音效）→ 留空。
+        </div>
+      </div>
+
+      <!-- 前置条件：上一条触发过音效的条目要是指定动作，这条才响 -->
+      <div class="field"><span>前置条件</span>
+        <label class="inline">上一条条目 FSM
+          <input type="number" id="edPrevFsm" class="num" placeholder="-1" title="-1 = 不要求；填上一条条目（触发过音效的那条）的 FSMId">
+        </label>
+        <label class="inline">LMT
+          <input type="number" id="edPrevLmt" class="num" placeholder="-1" title="-1 = 不要求；填上一条条目的 LMT">
+        </label>
+      </div>
       <div class="field hint">
-        <b>动作组是什么</b>：给「同一招的多个触发条目」填<b>同一个组名</b>（如都填 <code>气刃4</code>），
-        它们就<b>整招只响一次</b> —— 哪个条件先命中就播哪个，并且刃级/蓄力等状态在那一刻<b>定格</b>，
-        不会因为招式后段状态变了又响第二声。<br>
-        <b>什么时候要填</b>：一招生效分好几帧、或多条条目指向同一招时。<br>
-        <b>什么时候别填</b>：一招里你<b>故意</b>想让多段各响一声（比如三段斩每段一个音效）→ 留空。
+        只有「<b>上一条触发过音效的条目</b>」是指定的 FSM/LMT 时，这条才响。
+        用来做「接在某个动作之后才响」的连段音效；两个都填 -1 = 不要求（默认）。
+        <b>注意</b>：判断的是"<b>上一条条目</b>"，不是"上一个动作"。
       </div>
       <div class="field"><span>FSMTarget</span><input type="number" id="edFsmTarget" class="num" title="-1 = 不限定；FSM 是 (target,id) 二元组，跨层重号时用来消歧"></div>
       <div class="field"><span></span><label class="inline"><input type="checkbox" id="edStop"> Stop：命中此动作时停止正在播放的音效</label></div>

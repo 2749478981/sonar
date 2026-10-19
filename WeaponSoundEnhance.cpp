@@ -216,6 +216,9 @@ std::int32_t   gFsmTarget = -1;
 std::uint32_t  gFsmTargetOff = 0x6274;   // FSM target 值偏移（ini FsmTargetOff 可覆盖）
 
 // 大剑蓄力等级：和太刀刃级在**同一个对象**上，只是值偏移不同
+// 上一条"触发过音效的条目"的动作（前置条件 PrevFsm/PrevLmt 用；-1 = 还没有）
+int            gPrevEntryFsm = -1;
+int            gPrevEntryLmt = -1;
 std::int32_t   gCharge = -1;
 std::uint32_t  gChargeValOff = 0x2358;   // 别用 0x2370：大剑上它只从 2 起跳，分不出 1 蓄和没蓄
 
@@ -264,7 +267,7 @@ std::uint32_t  gHitMonOff   = 0x12958;// *(entity + off) = 武器最近命中的
 void Refresh()
 {
     gLmt = -1; gFsm = -1; gWeapon = -1; gWeaponId = -1; gGauge = -1;
-    gFsmTarget = -1; gCharge = -1; gQuestDmg = -1;
+    gFsmTarget = -1; gCharge = -1; gQuestDmg = -1; gPrevEntryFsm = -1; gPrevEntryLmt = -1;
     gMapId = -1; gQuestState = -1;
 
     {
@@ -1214,6 +1217,10 @@ struct Attack
     Pool gaugePool[4];            // LS gauge pools, keyed by level 0..3
     Pool chargePool[4];           // 蓄力等级池（大剑/弓/锤），keyed by 蓄力段 0..3
     bool stop = false;            // Stop=1：命中这条时停止正在播放的音效（无音效条目）
+    // ★ 前置条件：要求"上一条触发过音效的条目"是这条指定的动作（fsm/lmt），
+    //   用来做"只有在接了某个动作之后才响"的连段音效。-1 = 不要求。
+    int prevFsm = -1;
+    int prevLmt = -1;
     bool enabled = true;          // Enabled=0：临时停用这条（配好但先不生效，用来单独听某一条）
     bool inMatch = false;         // edge latch: fire once per action (ungrouped entries)
     std::uint64_t lastTriggerMs = 0;  // 每条目独立防抖：以前是全局 gLastTrigger，
@@ -2155,6 +2162,10 @@ void LoadConfig()
         } else if (key == "ChargeLevel") {
             const int cl = std::atoi(val.c_str());   // 0=不是蓄力条目；1..3=负责第 N 段
             cur.chargeLevel = (cl >= 1 && cl <= 3) ? cl : 0;
+        } else if (key == "PrevFsm") {
+            cur.prevFsm = std::atoi(val.c_str());
+        } else if (key == "PrevLmt") {
+            cur.prevLmt = std::atoi(val.c_str());
         } else if (key == "ChargeCut") {
             cur.chargeCut = std::atoi(val.c_str()) != 0;
         } else if (key == "CheckDelayMs") {
@@ -2820,7 +2831,13 @@ bool FireEntry(const Attack& e, int gauge, std::mt19937& rng, std::uint64_t nowM
     }
     const std::string what = tag + (usedGauge ? std::string(" gauge=") + std::to_string(gauge)
                                               : std::string(" gauge=default"));
-    return FirePool(pool, rng, nowMs, what);
+    const bool fired = FirePool(pool, rng, nowMs, what);
+    if (fired) {
+        // 记下"上一条触发过音效的条目"的动作，供前置条件（PrevFsm/PrevLmt）判断
+        player::gPrevEntryFsm = (e.fsmId >= 0) ? e.fsmId : player::gFsm;
+        player::gPrevEntryLmt = (!e.lmt.empty()) ? e.lmt[0] : player::gLmt;
+    }
+    return fired;
 }
 
 // 蓄力等级池：按 gCharge 段数挑池。charge 无效（-1）时回退默认池。
@@ -3282,6 +3299,12 @@ DWORD WINAPI WorkerProc(LPVOID)
                 // ★ 外加武器触发开关（默认全关）：该武器没勾 → 一律不匹配
                 // ★ 停用的条目一律不匹配（Enabled=0）
                 if (!e.enabled) continue;
+                // ★ 前置条件：要求上一条触发过音效的条目是指定动作（fsm/lmt）
+                if (e.prevFsm >= 0 || e.prevLmt >= 0) {
+                    const bool fsmOk = (e.prevFsm < 0) || (player::gPrevEntryFsm == e.prevFsm);
+                    const bool lmtOk = (e.prevLmt < 0) || (player::gPrevEntryLmt == e.prevLmt);
+                    if (!fsmOk || !lmtOk) continue;
+                }
                 const bool matchBase =
                     WeaponPermitted(e.weaponType, weapon) &&
                     (e.weaponType < 0 || e.weaponType == weapon) &&
