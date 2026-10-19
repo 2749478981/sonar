@@ -11,8 +11,8 @@ IDI_APP ICON DISCARDABLE "icons\\sonar.ico"
 
 // 版本信息：显示在 DLL 属性页，同时也是"这个 DLL 是 Sonar"的明确标记。
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION    2,38,8,0
- PRODUCTVERSION 2,38,8,0
+ FILEVERSION    2,39,0,0
+ PRODUCTVERSION 2,39,0,0
  FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
  FILEFLAGS      0
  FILEOS         VOS_NT_WINDOWS32
@@ -25,11 +25,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Sonar"
             VALUE "FileDescription",  "Sonar - Monster Hunter: World action sound plugin"
-            VALUE "FileVersion",      "2.38.8.0"
+            VALUE "FileVersion",      "2.39.0.0"
             VALUE "InternalName",     "Sonar"
             VALUE "OriginalFilename", "WeaponSoundEnhance.dll"
             VALUE "ProductName",      "Sonar"
-            VALUE "ProductVersion",   "2.38.8.0"
+            VALUE "ProductVersion",   "2.39.0.0"
             VALUE "LegalCopyright",   "MIT License"
         END
     END
