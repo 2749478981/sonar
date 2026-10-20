@@ -1407,7 +1407,9 @@ struct Core::Impl {
     int wemLoopDrop = 0;              // 被判循环音静默丢弃的条数（界面统计）
 
     // ---- wem 捕获（读 SonarAudio.log，GUI 进程内即可，不进游戏）----
-    std::string wemLogPath;                                        // plugins\SonarAudio.log
+    std::string wemLogPath;                                        // <数据目录>\WeaponSoundEnhance_wem.log
+    std::string wemLogFile;                                        // 解析结果（wem.diag 诊断用）
+    std::string sceneDir;                                          // 场景小文件目录（wem.diag 诊断用）
     std::string wemMapPath;                                        // plugins\SonarAudio.mediaids.txt
     std::string wemSeqPath;                                        // exeDir\WseMediaSeqs.txt（media_id→bank,序号 真值表）
     // 用户自定义 wem 名字库（不随包覆盖）：plugins\WeaponSoundEnhance\WseWemNames_user.txt
@@ -1712,21 +1714,19 @@ struct Core::Impl {
             if (FsExists(d + "WeaponSoundEnhance_efx.log")) { efxLogPath = d + "WeaponSoundEnhance_efx.log"; break; }
         }
         if (efxLogPath.empty() && !cand.empty()) efxLogPath = cand[0] + "WeaponSoundEnhance_efx.log";
-        for (const auto& d : cand) {
-            // 新名（我们自己的 DLL 写）；旧名 SonarAudio.log 兼容老版本
-            if (FsExists(d + "WeaponSoundEnhance_wem.log")) {
-                wemLogPath = d + "WeaponSoundEnhance_wem.log";
-                return;
-            }
-            if (FsExists(d + "SonarAudio.log")) {
-                wemLogPath = d + "SonarAudio.log";
-                return;
-            }
-        }
-        if (!cand.empty()) {   // log 还没生成（游戏没跑过）也先占位，运行时照常尝试
-            wemLogPath = cand[0] + "WeaponSoundEnhance_wem.log";
-        }
+    for (const auto& d : cand) {
+        // 新名（我们自己的 DLL 写）；旧名 SonarAudio.log 兼容老版本
+        if (FsExists(d + "WeaponSoundEnhance_wem.log")) { wemLogPath = d + "WeaponSoundEnhance_wem.log"; break; }
+        if (FsExists(d + "SonarAudio.log")) { wemLogPath = d + "SonarAudio.log"; break; }
     }
+    if (wemLogPath.empty() && !cand.empty())   // log 还没生成（游戏没跑过）也先占位，运行时照常尝试
+        wemLogPath = cand[0] + "WeaponSoundEnhance_wem.log";
+
+    // ★ 记下解析结果，供 wem.diag 输出。上一轮就是 GUI 读错目录导致"没有 wem / 场景未知"，
+    //   而日志里看不出它读的是哪份文件，白排查一轮 —— 以后一眼可见。
+    wemLogFile = wemLogPath;
+    sceneDir   = cand.empty() ? std::string() : cand[0];
+}
 
     // 用户自定义 wem 名字库：读入并覆盖官方映射（用户优先）
     void LoadWemUserNames() {
@@ -4943,6 +4943,14 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
         }
 
         // ---------------- 游戏交互 ----------------
+        // 诊断：GUI 到底在读哪份 wem 日志 / 哪个场景目录（排查"没有 wem / 场景未知"）
+        if (method == "wem.diag") {
+            JVal d = JVal::obj();
+            d.set("wem", JVal(im->wemLogFile));
+            d.set("sceneDir", JVal(im->sceneDir));
+            d.set("wemExists", JVal(!im->wemLogFile.empty() && FsExists(im->wemLogFile)));
+            return OkJson(d);
+        }
         if (method == "game.reload") {
             // ★ 重载前先把当前改动保存进 ini（点击重载 = 保存 + 生效，一步到位）
             if (im->cfg.loaded && !im->cfg.path.empty())

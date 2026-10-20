@@ -1001,6 +1001,8 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     {   // 插件 DLL 是否旧了（本地判定）：排查"更新后 DLL 没换成"用
         const std::string st = g_core.Handle("state", "{}");
         LogLine("dllStale: %s", st.find("\"dllStale\":true") != std::string::npos ? "true（DLL 比 exe 旧：上次更新时游戏在运行没换成）" : "false");
+        // wem/场景读取路径：排查"看不到 wem / 场景显示未知"时一眼看出读的是哪份文件
+        LogLine("wemdiag: %s", g_core.Handle("wem.diag", "{}").c_str());
     }
     ::ShowWindow(hwnd, SW_SHOW);
     ::UpdateWindow(hwnd);
