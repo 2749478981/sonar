@@ -130,6 +130,20 @@ void LogLine(const char* fmt, ...) {
                           st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, body);
     if (n <= 0) return;
 
+    // ★ 体积上限：超过 512KB 就清空重写（不是"只停写"——那样文件会停在几十 MB）。
+    //   读取端（插件/GUI）都有"文件变小 = 被截断"的检测，清了不会重放旧事件。
+    {
+        static uint64_t sLastCheck = 0;
+        const uint64_t nowMs = ::GetTickCount64();
+        if (nowMs - sLastCheck > 5000) {
+            sLastCheck = nowMs;
+            WIN32_FILE_ATTRIBUTE_DATA fad{};
+            if (::GetFileAttributesExW(g_logPath.c_str(), GetFileExInfoStandard, &fad) &&
+                (((uint64_t)fad.nFileSizeHigh << 32) | fad.nFileSizeLow) > (512ull << 10)) {
+                ::DeleteFileW(g_logPath.c_str());   // 清空重写；读取端会把 fileSize 变小当成截断
+            }
+        }
+    }
     ::EnterCriticalSection(&g_logCs);
     HANDLE h = ::CreateFileW(g_logPath.c_str(), FILE_APPEND_DATA,
                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,

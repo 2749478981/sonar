@@ -471,7 +471,14 @@ void LogV(const char* fmt, va_list ap)
     vsnprintf_s(buf, _TRUNCATE, fmt, ap);
     ::OutputDebugStringA(buf);
     FILE* f = nullptr;
+    // ★ 体积上限：超过 128KB 就清空重来 —— 用户明确要求"不能有无限增长的 log 文件"。
+    //   这个日志只在排查时有用，清掉不影响功能（Debug=1 时才写 LogD）。
     if (_wfopen_s(&f, LongPathW(gLogPath).c_str(), L"ab") == 0 && f) {
+        if (ftell(f) > 128 * 1024) {
+            fclose(f);
+            f = nullptr;
+            if (_wfopen_s(&f, LongPathW(gLogPath).c_str(), L"wb") != 0 || !f) return;
+        }
         SYSTEMTIME st{}; ::GetLocalTime(&st);
         fprintf(f, "[%02u:%02u:%02u.%03u] %s\n",
                 st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, buf);
@@ -3255,7 +3262,8 @@ DWORD WINAPI WorkerProc(LPVOID)
                             player::gMapId, player::gQuestState,
                             player::gQuestDmg, player::gMonHp, player::gMonHpMax);
                 FILE* f = nullptr;
-                if (_wfopen_s(&f, (gModuleDir + L"SonarScene.txt").c_str(), L"wb") == 0 && f) {
+                // ★ 输出放数据目录：plugins\ 里只留主 dll
+                if (_wfopen_s(&f, (gDataDir + L"SonarScene.txt").c_str(), L"wb") == 0 && f) {
                     fwrite(buf, 1, strlen(buf), f);
                     fclose(f);
                 }
@@ -3538,7 +3546,17 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
         gModuleDir = (sl == std::wstring::npos) ? std::wstring() : selfw.substr(0, sl + 1);
         gDataDir  = ResolveDataDir();
         gIniPath  = gDataDir + L"WeaponSoundEnhance.ini";
-        gWemLogPath = gModuleDir + L"SonarAudio.log";   // 与 DLL 同在 plugins\（SonarAudio hook 输出）
+        // ★ 写端（SonarIpc）现在把 wem 日志写进数据目录，名字是 WeaponSoundEnhance_wem.log；
+        //   旧版曾写在 plugins\ 下叫 SonarAudio.log —— 两个位置都认，优先数据目录。
+        {
+            const std::wstring cand1 = gDataDir + L"WeaponSoundEnhance_wem.log";
+            const std::wstring cand2 = gModuleDir + L"WeaponSoundEnhance_wem.log";
+            const std::wstring cand3 = gModuleDir + L"SonarAudio.log";
+            if (FileExistsW(cand1))      gWemLogPath = cand1;
+            else if (FileExistsW(cand2)) gWemLogPath = cand2;
+            else if (FileExistsW(cand3)) gWemLogPath = cand3;
+            else                         gWemLogPath = cand1;   // 还没有就先盯着数据目录那份
+        }
         LogInit();
         SeedIniFromTemplate();
         LoadConfig();

@@ -550,6 +550,10 @@ void SonarAudioStart(HMODULE m) {
     g_dir = buf;
     const size_t s = g_dir.find_last_of(L"\\/");
     g_dir = (s == std::wstring::npos) ? L"" : g_dir.substr(0, s + 1);
+    // ★ 输出（日志/ini）一律放数据目录 plugins\\WeaponSoundEnhance\\，
+    //   插件目录里只留主 dll（用户明确要求，别在 plugins\ 里堆文件）。
+    if (::GetFileAttributesW((g_dir + L"WeaponSoundEnhance").c_str()) != INVALID_FILE_ATTRIBUTES)
+        g_dir += L"WeaponSoundEnhance\\";
     LogInit(g_dir);
     LogLine("SonarAudio module (merged into WeaponSoundEnhance.dll) loading...");
     std::thread(Run).detach();

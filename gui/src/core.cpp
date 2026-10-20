@@ -1492,6 +1492,9 @@ struct Core::Impl {
         // 候选顺序和旧版一致：优先"游戏实际读的那份"，因为 GUI 常被放在发布包
         // 解压目录里，先找 exe 同目录会导致"GUI 在改 A、游戏在读 B"，怎么改都没反应。
         std::vector<std::string> cand;
+    // ★ 数据目录（= exeDir）优先：插件现在把 _wem.log 写在 plugins\WeaponSoundEnhance\，
+    //   plugins\ 根只留主 dll（不再往那一层堆文件）。
+    cand.push_back(exeDir);
         if (haveGame) {
             cand.push_back(gameIniPath);
             cand.push_back(gdir + "nativePC\\plugins\\WeaponSoundEnhance.ini");
