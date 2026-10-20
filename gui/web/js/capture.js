@@ -171,11 +171,11 @@ const Capture = (() => {
     host.appendChild(conn);
 
     // 场景
-    const scene = a.sceneLabel(L.mapId);
+    const scene = a.sceneLabel(L.mapId);   // 已含"场景：xxx（地图 N）"整句，这里不要再加前缀/后缀
     if (scene) {
       const peace = (L.mapId > 0 && a.isPeaceZone(L.mapId)) ? ' · 和平区' : '';
       host.appendChild(el('div', { class: 'conn' },
-        el('span', { text: '场景：' + scene + (L.mapId > 0 ? `（地图 ${L.mapId}）` : '') }),
+        el('span', { text: scene }),
         el('span', { class: 'dim', text: (L.questState === 2 ? '任务中' : (L.questState >= 0 ? '非任务' : '')) + peace })));
     }
 
