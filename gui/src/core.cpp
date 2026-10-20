@@ -1494,7 +1494,6 @@ struct Core::Impl {
         std::vector<std::string> cand;
     // ★ 数据目录（= exeDir）优先：插件现在把 _wem.log 写在 plugins\WeaponSoundEnhance\，
     //   plugins\ 根只留主 dll（不再往那一层堆文件）。
-    cand.push_back(exeDir);
         if (haveGame) {
             cand.push_back(gameIniPath);
             cand.push_back(gdir + "nativePC\\plugins\\WeaponSoundEnhance.ini");
@@ -1684,6 +1683,9 @@ struct Core::Impl {
     // ---- wem 捕获通道（读 SonarAudio.log 的增量，单独走，不需要游戏内插件）----
     void InitWemWatch() {
         std::vector<std::string> cand;
+    // ★ 数据目录（= exeDir）优先：插件把 _wem.log / SonarScene.txt 写在 plugins\WeaponSoundEnhance\，
+    //   plugins\ 根只留主 dll；旧位置在后面兜底（老版本仍能读到）。
+    cand.push_back(exeDir);
         const std::size_t pl = gameIniPath.find("nativePC\\plugins\\");
         if (pl != std::string::npos)
             cand.push_back(gameIniPath.substr(0, pl + std::string("nativePC\\plugins\\").size()));
