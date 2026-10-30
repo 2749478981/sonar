@@ -1417,6 +1417,10 @@ struct Core::Impl {
     std::string wemUserNamePath;
     std::unordered_map<int, std::string> wemUserNames;
     std::string assetsDir;      // 内嵌资源解压目录（%LOCALAPPDATA%\Sonar\assets）
+    int assetsExtracted = 0;    // 上次解压成功文件数（assets.diag 诊断）
+    int assetsFailed = 0;       // 上次解压失败文件数（>0 说明图标会空白）
+    std::string assetsErr;      // 解压失败原因（写在 assets.diag 里）
+    bool assetsReused = false;  // true = 本次启动复用了已解压好的资源（没重新解压）
     std::unordered_map<int, std::string> wemNames;                 // media id -> 可读名(UTF-8)
     std::unordered_map<int, std::string> wemNotes;                 // media id -> 括号里的注释名（瓶子声/弹刀…）
     std::unordered_map<int, std::pair<std::string, int>> wemSeqs;  // media id -> (bank, 序号=该bank DIDX第几个)
@@ -1871,14 +1875,15 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
     }
 
     void ExtractEmbeddedAssets() {
+        assetsReused = false;
         HMODULE mod = ::GetModuleHandleW(nullptr);
         HRSRC res = ::FindResourceW(mod, MAKEINTRESOURCEW(200), RT_RCDATA);
-        if (!res) return;
+        if (!res) { assetsErr = "exe 里没有内嵌资源包（构建时没编进 assets.zip？）"; return; }
         const DWORD size = ::SizeofResource(mod, res);
         HGLOBAL hg = ::LoadResource(mod, res);
-        if (!hg || size == 0) return;
+        if (!hg || size == 0) { assetsErr = "内嵌资源包为空"; return; }
         const void* data = ::LockResource(hg);
-        if (!data) return;
+        if (!data) { assetsErr = "内嵌资源包锁定失败"; return; }
 
         assetsDir = LocalAssetsDir();
         const std::string marker = assetsDir + "\\.assets_ver";
@@ -1897,12 +1902,18 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
                     upToDate = false;   // 文件丢了 → 重新释放
                 }
             }
-            if (upToDate) return;   // 已是最新且文件齐全，跳过
+            if (upToDate) { assetsReused = true; return; }   // 已是最新且文件齐全，跳过
         }
         MakeDirs(Utf8ToWide(assetsDir));
+        assetsExtracted = 0;
+        assetsFailed = 0;
+        assetsErr.clear();
 
         mz_zip_archive zip{};
-        if (!mz_zip_reader_init_mem(&zip, data, (size_t)size, 0)) return;
+        if (!mz_zip_reader_init_mem(&zip, data, (size_t)size, 0)) {
+            assetsErr = "zip 解析失败（内嵌资源损坏？）";
+            return;
+        }
         const mz_uint n = mz_zip_reader_get_num_files(&zip);
         for (mz_uint i = 0; i < n; ++i) {
             char name[512] = {};
@@ -1910,7 +1921,6 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
             std::string rel(name);
             for (std::size_t k = 0; k < rel.size(); ++k) if (rel[k] == '\\') rel[k] = '/';
             if (rel.empty() || rel.back() == '/') continue;
-            // 目录用相对名字建（miniz 的 extract_to_file 收 ANSI 路径，文件名都是 ASCII）
             std::string relDir = rel;
             const std::size_t rs = relDir.find_last_of('/');
             std::string sub = assetsDir;
@@ -1922,11 +1932,25 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
             MakeDirs(Utf8ToWide(sub));
             std::string relWin = rel;
             for (std::size_t k = 0; k < relWin.size(); ++k) if (relWin[k] == '/') relWin[k] = '\\';
-            const std::string fullAnsi = assetsDir + "\\" + relWin;
-            mz_zip_reader_extract_to_file(&zip, i, fullAnsi.c_str(), 0);
+            const std::string full = assetsDir + "\\" + relWin;
+            // ★ 必须自己按宽路径写：miniz 的 extract_to_file 收 ANSI 路径，
+            //   用户名是中文（C:\Users\张三\AppData\Local）时 UTF-8 路径被当成
+            //   GBK → 每个文件都写失败，界面左上角 logo 和武器图标全空，
+            //   而且一声不吭（英文用户名正常，中文用户名空白 —— 真机复现过）。
+            std::size_t rawSz = 0;
+            void* raw = mz_zip_reader_extract_to_heap(&zip, i, &rawSz, 0);
+            if (!raw) { ++assetsFailed; continue; }
+            const bool wrote = WriteWideFile(ExtendPath(Utf8ToWide(full)), raw, rawSz);
+            mz_free(raw);
+            if (wrote) ++assetsExtracted; else ++assetsFailed;
         }
         mz_zip_reader_end(&zip);
-        FsWrite(marker, want);
+        // 有文件没写成功就不留版本标记，否则下次启动会误判"已解压"而不再补救
+        if (assetsFailed == 0) {
+            FsWrite(marker, want);
+        } else {
+            assetsErr = "有 " + std::to_string(assetsFailed) + " 个文件写入失败（目录不可写？）";
+        }
     }
 
     // 播放内嵌资源里的音频（成就音效 coinmul.wav 等）
@@ -3050,6 +3074,8 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
 // ===========================================================================
 Core::Core() : mImpl(new Impl()) {}
 Core::~Core() { delete mImpl; }
+
+std::string Core::AssetsDir() { return mImpl ? mImpl->assetsDir : std::string(); }
 
 namespace {
 // Core 的 Impl 是私有嵌套类型（头文件里定的，不改动），但本文件里的静态辅助函数
@@ -5920,6 +5946,29 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             return OkJson(d);
         }
 
+        if (method == "assets.diag") {
+            // 内嵌资源解压自检：界面"左上角没 logo / 武器图标空白"时靠它定位
+            //  （中文用户名导致路径解析失败 / 目录不可写 / 资源没编进 exe）
+            JVal d = JVal::obj();
+            d.set("dir", JVal(ToSlash(im->assetsDir)));
+            d.set("extracted", JVal(im->assetsExtracted));
+            d.set("failed", JVal(im->assetsFailed));
+            d.set("err", JVal(im->assetsErr));
+            d.set("reused", JVal(im->assetsReused));
+            const std::string icon = im->assetsDir + "\\sonar_icon.png";
+            const std::string wdir = im->assetsDir + "\\weapons_icons";
+            d.set("iconExists", JVal(::GetFileAttributesW(Utf8ToWide(icon).c_str()) != INVALID_FILE_ATTRIBUTES));
+            int wc = 0;
+            WIN32_FIND_DATAW fd{};
+            HANDLE hf = ::FindFirstFileW(Utf8ToWide(wdir + "\\*.png").c_str(), &fd);
+            if (hf != INVALID_HANDLE_VALUE) {
+                do { ++wc; } while (::FindNextFileW(hf, &fd));
+                ::FindClose(hf);
+            }
+            d.set("weaponsCount", JVal(wc));
+            return OkJson(d);
+        }
+
         if (method == "wem.convertEnv") {
             // 转换环境自检：给界面显示"能不能转 wem"
             const std::wstring wwise = bankmod::FindWwiseConsole();
@@ -6044,7 +6093,29 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 std::string exErr;
                 {
                     mz_zip_archive z{};
-                    if (mz_zip_reader_init_file(&z, zip.c_str(), 0)) {
+                    // miniz 的 init_file/extract_to_file 都走 ANSI fopen ——
+                    // 路径里带中文（中文用户名或游戏装在中文目录）时必然失败。
+                    // 所以：先用窄路径试（快路径，不变），失败就按宽路径整包读进内存。
+                    bool opened = mz_zip_reader_init_file(&z, zip.c_str(), 0) != MZ_FALSE;
+                    std::vector<unsigned char> zipMem;
+                    if (!opened) {
+                        HANDLE hZip = ::CreateFileW(Utf8ToWide(zip).c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                        if (hZip != INVALID_HANDLE_VALUE) {
+                            LARGE_INTEGER zsz{};
+                            if (::GetFileSizeEx(hZip, &zsz) && zsz.QuadPart > 0 &&
+                                zsz.QuadPart < (1LL << 28)) {
+                                zipMem.resize((std::size_t)zsz.QuadPart);
+                                DWORD got = 0;
+                                if (::ReadFile(hZip, zipMem.data(), (DWORD)zipMem.size(), &got, nullptr) &&
+                                    got == (DWORD)zipMem.size()) {
+                                    opened = mz_zip_reader_init_mem(&z, zipMem.data(), zipMem.size(), 0) != MZ_FALSE;
+                                }
+                            }
+                            ::CloseHandle(hZip);
+                        }
+                    }
+                    if (opened) {
                         const mz_uint n = mz_zip_reader_get_num_files(&z);
                         for (mz_uint i = 0; i < n; ++i) {
                             mz_zip_archive_file_stat st{};
@@ -6055,7 +6126,13 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                             const std::string low = [&nm] { std::string s = nm; for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }();
                             if (low.size() < 16) continue;
                             if (low.compare(low.size() - 15, 15, "/bin/ffmpeg.exe") != 0) continue;
-                            if (!mz_zip_reader_extract_to_file(&z, i, dst.c_str(), 0)) { exErr = "解压失败"; continue; }
+                            // ★ 写到磁盘也必须走宽路径（见上面注释）
+                            std::size_t binSz = 0;
+                            void* bin = mz_zip_reader_extract_to_heap(&z, i, &binSz, 0);
+                            if (!bin) { exErr = "解压失败"; continue; }
+                            const bool wrote = WriteWideFile(ExtendPath(Utf8ToWide(dst)), bin, binSz);
+                            mz_free(bin);
+                            if (!wrote) { exErr = "写入 wemkit\\ffmpeg.exe 失败（被杀毒软件拦了？）"; continue; }
                             extracted = true;
                             break;
                         }

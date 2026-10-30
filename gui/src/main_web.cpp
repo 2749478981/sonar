@@ -108,6 +108,30 @@ void LogLine(const char* fmt, ...) {
     fclose(f);
 }
 
+// ---- 内嵌资源虚拟主机（https://sonar.assets）----
+// 目录必须和 core 解压时用的是同一个（Core::AssetsDir()），不要自己再读
+// LOCALAPPDATA 拼一遍：两处一旦算出不同目录，图标就全部 404，界面上表现为
+// 「左上角没有 logo、武器图标空白」。资源目录为空时退回 exe 目录，
+// 兼容把 weapons_icons\ 放在 exe 旁边的老式安装。
+// 【踩过的坑】曾经这里自己读 LOCALAPPDATA；而 core 在环境变量缺失时会退回
+// %TEMP%，两边不一致 → 明明解压成功了界面也没图标。
+void MapAssetsHost(ICoreWebView2_3* web3) {
+    if (!web3) return;
+    const std::string ad = g_core.AssetsDir();
+    std::wstring dir;
+    if (!ad.empty()) {
+        const std::wstring w = Utf8ToWide(ad);
+        if (::PathFileExistsW((w + L"\\weapons_icons").c_str())) dir = w;
+    }
+    if (dir.empty() && ::PathFileExistsW((ExeDirW() + L"weapons_icons").c_str())) dir = ExeDirW();
+    if (dir.empty() && !ad.empty()) dir = Utf8ToWide(ad);
+    if (dir.empty()) dir = ExeDirW();
+    ::CreateDirectoryW(dir.c_str(), nullptr);
+    const HRESULT hr = web3->SetVirtualHostNameToFolderMapping(
+        L"sonar.assets", dir.c_str(), COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+    LogLine("assets host -> %s (hr=0x%08lX)", WideToUtf8(dir).c_str(), (unsigned long)hr);
+}
+
 // ---- 极简的"信封"解析：从 {id, method, params} 里挖出三段 ----
 // 不引 JSON 库：前端发的信封是我们自己拼的，格式固定，够用就行。
 struct Envelope { long long id = 0; std::string method; std::string params; };
@@ -708,12 +732,7 @@ void CreateOverlayWindow() {
                     if (SUCCEEDED(wv->QueryInterface(IID_PPV_ARGS(&wv3))) && wv3) {
                         wv3->SetVirtualHostNameToFolderMapping(L"sonar.local", g_webRootW.c_str(),
                                                               COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-                        wchar_t la2[MAX_PATH * 2] = {};
-                        if (::GetEnvironmentVariableW(L"LOCALAPPDATA", la2, MAX_PATH * 2) > 0) {
-                            const std::wstring assets = std::wstring(la2) + L"\\Sonar\\assets";
-                            wv3->SetVirtualHostNameToFolderMapping(L"sonar.assets", assets.c_str(),
-                                                                  COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-                        }
+                        MapAssetsHost(wv3.Get());
                         LogLine("overlay: host mappings set (sonar.local + sonar.assets)");
                     } else {
                         LogLine("overlay: ICoreWebView2_3 unavailable, mappings NOT set");
@@ -1003,6 +1022,8 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         LogLine("dllStale: %s", st.find("\"dllStale\":true") != std::string::npos ? "true（DLL 比 exe 旧：上次更新时游戏在运行没换成）" : "false");
         // wem/场景读取路径：排查"看不到 wem / 场景显示未知"时一眼看出读的是哪份文件
         LogLine("wemdiag: %s", g_core.Handle("wem.diag", "{}").c_str());
+        // 内嵌资源解压结果：排查"左上角没 logo / 武器图标空白"（典型是中文用户名）
+        LogLine("assetsdiag: %s", g_core.Handle("assets.diag", "{}").c_str());
     }
     ::ShowWindow(hwnd, SW_SHOW);
     ::UpdateWindow(hwnd);
@@ -1116,15 +1137,8 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                                 // 内嵌资源（武器图标 / logo / 成就音效）：
                                 // 启动时由 core 解压到 %LOCALAPPDATA%\Sonar\assets，
                                 // 这里映射成 https://sonar.assets，游戏目录保持干净。
-                                wchar_t la[MAX_PATH * 2] = {};
-                                if (::GetEnvironmentVariableW(L"LOCALAPPDATA", la, MAX_PATH * 2) > 0) {
-                                    std::wstring assets = std::wstring(la) + L"\\Sonar\\assets";
-                                    ::CreateDirectoryW(assets.c_str(), nullptr);
-                                    web3->SetVirtualHostNameToFolderMapping(
-                                        L"sonar.assets", assets.c_str(),
-                                        COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-                                    LogLine("assets host mapped: %s", WideToUtf8(assets).c_str());
-                                }
+                                // 目录由 core 给出（两处必须一致，见 MapAssetsHost 注释）。
+                                MapAssetsHost(web3.Get());
                             }
 
                             // ★ 导航完成前 WebView 区域默认是白底，一打开会先白屏一秒，
