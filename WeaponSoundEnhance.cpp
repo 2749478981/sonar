@@ -855,10 +855,16 @@ int gWemLoopFilter = 1;
 int gWemLoopRate   = 6;      // 3 秒窗口内达到这个次数即判为循环音（放宽：正常动作别被误判）
 int gWemLoopMuteMs = 4000;   // 判定为循环音后，忽略该 media 的时长（毫秒）
 
-// --- 武器触发开关（每武器一个，默认全关）---
-//   WeaponEnabled=0,1,...（14 个逗号分隔的 0/1，对应武器 0..13；缺省按 0）
-//   某个武器没开 → 该武器的条目（含通用条目按当前持握武器判定）一律不触发。
-bool gWeaponEnabled[14] = {};
+// --- 武器触发开关（每武器一个，默认全开）---
+//   WeaponEnabled=0,1,...（14 个逗号分隔的 0/1，对应武器 0..13）
+//   某个武器关掉 → 该武器的条目（含通用条目按当前持握武器判定）一律不触发。
+//   ★ 默认必须是"全开"：这个开关本来是给"只玩一个武器、不想听别的武器"的人用的，
+//     默认全关会让绝大多数人更新后直接没声音，而且界面上只有一个不起眼的小方框，
+//     根本想不到要回来勾（v2.38.6 起真实发生过，用户反馈"试听有声音、游戏里不响"）。
+bool gWeaponEnabled[14] = {
+    true, true, true, true, true, true, true,
+    true, true, true, true, true, true, true,
+};
 
 // --- wem 场景过滤（MHW_Memory_Map_Skill.md §3，已实测文档）---
 //   WemOnlyInQuest : 1 = 仅任务进行中(QuestState==2)才触发 wem（压掉集会/换区/菜单误触发）
@@ -2017,11 +2023,13 @@ void LoadConfig()
                 else if (key == "WemLoopRate") { int v = std::atoi(val.c_str()); if (v >= 1 && v <= 100) gWemLoopRate = v; }
                 else if (key == "WemLoopMuteMs") { int v = std::atoi(val.c_str()); if (v >= 0 && v <= 120000) gWemLoopMuteMs = v; }
                 else if (key == "WeaponEnabled") {
-                    // 14 个逗号分隔的 0/1（武器 0..13），缺省按 0（关）
+                    // 14 个逗号分隔的 0/1（武器 0..13）。缺的位按"开"处理，
+                    // 与 gWeaponEnabled 的初值一致 —— 以前缺省按 0，
+                    // 手写成 14 位以下的一行就会静默关掉后面所有武器。
                     std::vector<std::string> toks;
                     SplitList(val, toks);
                     for (int i = 0; i < 14; ++i)
-                        gWeaponEnabled[i] = (i < (int)toks.size() && std::atoi(toks[i].c_str()) != 0);
+                        gWeaponEnabled[i] = (i < (int)toks.size()) ? (std::atoi(toks[i].c_str()) != 0) : true;
                 }
                 else if (key == "WemOnlyInQuest") gWemOnlyInQuest = std::atoi(val.c_str()) != 0;
                 else if (key == "WemMapWhite") {
@@ -3304,7 +3312,7 @@ DWORD WINAPI WorkerProc(LPVOID)
                     for (int x : e.lmt) if (x == lmt) { lmtOk = true; break; }
 
                 // 去掉 HasSounds 的“基础匹配”：Stop 条目没有音效也要能匹配
-                // ★ 外加武器触发开关（默认全关）：该武器没勾 → 一律不匹配
+                // ★ 外加武器触发开关（默认全开，关掉才禁）：该武器被关 → 一律不匹配
                 // ★ 停用的条目一律不匹配（Enabled=0）
                 if (!e.enabled) continue;
                 // ★ 前置条件：要求上一条触发过音效的条目是指定动作（fsm/lmt）

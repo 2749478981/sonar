@@ -256,7 +256,7 @@ const ST = {
   hotkeys: {},
   active: {},
   weaponFilter: -1,
-  weaponOn: new Array(14).fill(false),   // 武器触发开关（默认全关）
+  weaponOn: new Array(14).fill(true),   // 武器触发开关（默认全开）
   onlyActive: false,
   search: '',
   sort: { key: 'name', asc: true },
@@ -386,13 +386,13 @@ function renderWeapons() {
   if (ST.anyCount > 0) rows.push({ id: -2, name: '通用(任意)', count: ST.anyCount });
 
   rows.forEach(r => {
-    // ★ 武器触发开关（0..13）：勾上才允许该武器的音效被触发（默认全关）
+    // ★ 武器触发开关（0..13）：默认全开，取消勾选才禁止该武器的音效触发
     let sw = null;
     if (r.id >= 0 && r.id < 14) {
       sw = h('input', {
         type: 'checkbox', class: 'wsw',
         checked: !!ST.weaponOn[r.id],
-        title: '勾上 = 允许触发该武器的音效（默认全关）',
+        title: '默认全开。取消勾选 = 不再触发该武器的音效（只影响游戏内触发，不影响试听）',
         onclick: ev => { ev.stopPropagation(); toggleWeaponOn(r.id); },
       });
     }
@@ -405,7 +405,7 @@ function renderWeapons() {
   });
 }
 
-// 武器触发开关：默认全关；勾上才允许该武器的条目触发音效
+// 武器触发开关：默认全开；取消勾选才禁止该武器的条目触发音效
 function toggleWeaponOn(id) {
   if (id < 0 || id >= 14) return;
   ST.weaponOn[id] = !ST.weaponOn[id];
@@ -425,8 +425,9 @@ function weaponName(id) {
 async function loadWeaponOn() {
   try {
     const r = await Backend.call('weapons.enabled.get', {});
-    ST.weaponOn = (r.enabled && r.enabled.length === 14) ? r.enabled.map(v => !!v) : new Array(14).fill(false);
-  } catch { ST.weaponOn = new Array(14).fill(false); }
+    // 拿不到就按"全开"（与后端默认一致），不要退化成全关把音效全掐掉
+    ST.weaponOn = (r.enabled && r.enabled.length === 14) ? r.enabled.map(v => !!v) : new Array(14).fill(true);
+  } catch { ST.weaponOn = new Array(14).fill(true); }
   renderWeapons();
 }
 
@@ -2556,7 +2557,7 @@ async function refresh() {
 
   // 条目列表和组合列表互不依赖，并行拉取省一次往返
   await Promise.all([loadEntries(), loadCombos()]);
-  await loadWeaponOn();   // ★ 武器触发开关（默认全关）
+  await loadWeaponOn();   // ★ 武器触发开关（默认全开）
   renderWeapons();
   renderComboPanel();
   applyFilter();

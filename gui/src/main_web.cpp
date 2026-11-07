@@ -545,6 +545,12 @@ void ProbePage() {
         L"var erc=et?(function(){var r=et.querySelector('tbody tr:not(.grp)');return r?r.children.length:-1;})():-1;"
         L"var dw=document.getElementById('dllWarn');"
         L"var dwS=dw?(dw.hidden?'hidden':'shown'):'missing';"
+        // 武器触发开关：勾着的数量 / 捕获历史里"已关掉武器"被打叉的行数
+        //（排查"游戏里不响"的第一现场：试听绕过触发条件，永远有声音）
+        L"var wsw=document.querySelectorAll('#weaponList .wsw');"
+        L"var wOn=0;for(var i2=0;i2<wsw.length;i2++){if(wsw[i2].checked)wOn++;}"
+        L"var wOff=(hm?hm.querySelectorAll('.hrec.offw').length:-1);"
+        L"var wOffX=(hm?hm.querySelectorAll('.hrec .offx').length:-1);"
         L"var ct=hm?(hm.textContent||'').replace(/\\s+/g,' ').slice(0,110):'(none)';"
         L"var wemView=(function(){"
         L"if(typeof Capture==='undefined'||!hm)return 'nocap';"
@@ -574,7 +580,7 @@ void ProbePage() {
         L"logoOk:(logo?logo.naturalWidth>0:null),"
         L"capType:(typeof Capture),api:apiInfo,hosts:hosts.length,capRows:cm+'/'+cb,view:view,"
         L"layout:layout,wemView:wemView,capStat:(stat?stat.textContent:''),capFilter:(filt?filt.textContent:''),"
-        L"capText:ct,dllWarn:dwS,thCols:etc,rowCols:erc,weaponColHidden:ehw,jsErr:jse,status:(st?st.textContent:'')"
+        L"capText:ct,dllWarn:dwS,thCols:etc,rowCols:erc,weaponColHidden:ehw,weaponOn:wOn+'/'+wsw.length,weaponOffRows:wOff+'/'+wOffX,jsErr:jse,status:(st?st.textContent:'')"
         L"});})()",
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
             [](HRESULT, LPCWSTR json) -> HRESULT {

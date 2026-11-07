@@ -5033,14 +5033,18 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             return OkJson(d);
         }
 
-        // ---------------- 武器触发开关（每武器一个，默认全关）----------------
-        // ---------------- 武器触发开关（每武器一个，默认全关；存 cfg → SaveConfig 保留）----------------
+        // ---------------- 武器触发开关（每武器一个，默认全开）----------------
+        // ---------------- 武器触发开关（每武器一个，默认全开；存 cfg → SaveConfig 保留）----------------
         if (method == "weapons.enabled.get") {
-            std::vector<int> en(14, 0);
+            // ★ ini 里没有 WeaponEnabled 这一行时按"全开"，与插件侧 gWeaponEnabled 的初值保持一致。
+            //   不一致会出现最糟的组合：界面显示全关、实际全开，用户随手一勾就变成"只开这一个"。
+            std::vector<int> en(14, 1);
             std::vector<std::string> toks;
             SplitCsv(im->cfg.global.weaponEnabled, toks);
-            for (int i = 0; i < 14; ++i)
-                en[i] = (i < (int)toks.size() && std::atoi(toks[i].c_str()) != 0);
+            if (!toks.empty()) {
+                for (int i = 0; i < 14; ++i)
+                    en[i] = (i < (int)toks.size()) ? (std::atoi(toks[i].c_str()) != 0) : 1;
+            }
             JVal arr = JVal::arr();
             for (int i = 0; i < 14; ++i) arr.push(JVal(en[i]));
             JVal d = JVal::obj();

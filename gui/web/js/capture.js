@@ -104,10 +104,31 @@ const Capture = (() => {
     return el('div', attrs, ...kids.filter(Boolean));
   }
 
+  // 该武器是否被"武器触发开关"关掉了（左栏那个小方框）。
+  // 关掉的武器在游戏里不会响，但试听永远有声音 —— 所以捕获记录里必须能一眼看出来，
+  // 否则用户会以为"捕获到了却没声音"是插件坏了。
+  function weaponOff(w) {
+    const a = API();
+    const on = (a && a.ST && a.ST.weaponOn) || null;
+    if (!on || typeof w !== 'number' || w < 0 || w >= 14) return false;
+    return !on[w];
+  }
+  // 关掉的武器在行首打一个叉（颜色区分 + 符号，不靠一整条黄字横幅）
+  function offMark(w) {
+    if (!weaponOff(w)) return null;
+    return el('b', { class: 'offx', text: '✕',
+      title: '该武器的触发已在左栏关掉：游戏里不会响（试听不受影响）' });
+  }
+  function offCls(w) { return weaponOff(w) ? ' offw' : ''; }
+
   function derRow(r) {
     const a = API();
-    return row({ class: 'hrec' + (r.added ? ' added' : ''), title: '点击把这个动作加入条目',
+    return row({ class: 'hrec' + (r.added ? ' added' : '') + offCls(r.weapon),
+                 title: weaponOff(r.weapon)
+                   ? '该武器的触发已在左栏关掉：游戏里不会响（试听不受影响）'
+                   : '点击把这个动作加入条目',
                  onclick: () => a.captureToEntry(r) },
+      offMark(r.weapon),
       el('b', { text: r.time || '' }),
       el('span', { class: 'n', text: r.name || ('fsm ' + r.fsm) }),
       el('span', { class: 'ids', text: `w${r.weapon} ${r.fsm}/${r.lmt}` }),
@@ -125,9 +146,12 @@ const Capture = (() => {
       (r.seqNum ? ` · 第${r.seqNum}个` : '');
     // ★ 两行显示：第一行时间+名称，第二行 media 信息 + 按钮。
     //   以前一行塞 3 个按钮 + 长文本，必须横向拖动才能点到按钮。
-    return el('div', { class: 'hrec wem two' + (r.added ? ' added' : '') + (playing ? ' playing' : ''),
-                       title: '播放：' + nm + '（core 会自动找它所属的 nbnk）' },
+    return el('div', { class: 'hrec wem two' + (r.added ? ' added' : '') + (playing ? ' playing' : '') + offCls(r.weapon),
+                       title: weaponOff(r.weapon)
+                         ? '该武器的触发已在左栏关掉：游戏里不会响（试听不受影响）'
+                         : '播放：' + nm + '（core 会自动找它所属的 nbnk）' },
       el('div', { class: 'l1', onclick: () => { if (page === 'bank') playWem(r); else a.addWemRecord(r); } },
+        offMark(r.weapon),
         el('b', { text: r.time || '' }),
         el('span', { class: 'n', text: nm })),
       el('div', { class: 'l2' },
