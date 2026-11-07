@@ -1217,6 +1217,20 @@ function lmtHint() {
   const bad = raw.split(/[,;\s]+/).filter(s => s && !/^-?\d+$/.test(s));
   if (bad.length) { el.innerHTML = ''; el.append('→ 无法识别：', h('b', { text: bad.join(', ') }),
     '　只能填整数（逗号分隔）'); return; }
+  if (e.lmt.some(v => v < 0)) {
+    // 后端把 -1 当成"不限"（会清空列表），这里要跟它说的一致，别显示成"只匹配 -1"
+    el.innerHTML = '';
+    el.append('→ ', h('b', { text: '-1' }), ' = 不限 LMT：只要 FSMId 相同就会触发');
+    return;
+  }
+  if (e.lmt.length >= 2) {
+    // 多值 = 任一命中即触发（OR）。这里必须写清楚，否则用户会以为要"全部满足"
+    el.innerHTML = '';
+    el.append('→ 命中其中任意一个就触发：', h('b', { text: e.lmt.join(', ') }));
+    el.append(h('br'));
+    el.append(h('span', { text: '　不是"全部都要满足"。若想让这个 FSM 的所有动作都生效，请留空、填 -1，或勾「LMT 不限」' }));
+    return;
+  }
   el.textContent = '→ 只匹配 LMT：' + e.lmt.join(', ');
 }
 function parseLmt(s) {

@@ -1041,9 +1041,17 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                 L"Sonar 配置工具", MB_ICONERROR);
             return 1;
         }
-        if (!::PathFileExistsW((ExeDirW() + L"weapons_icons").c_str())) {
-            // 只缺图标不致命，提一声就行，不用拦着不让用
-            LogLine("warning: weapons_icons folder missing, icons will show placeholders");
+        {   // 图标现在从内嵌资源解压到 assets 目录（MapAssetsHost 决定），
+            // 不再是"exe 旁边的 weapons_icons"。这里按实际映射根检查，
+            // 免得解压正常却报一句假的 "folder missing"。
+            const std::wstring ad = Utf8ToWide(g_core.AssetsDir());
+            const std::wstring probe =
+                (!ad.empty() && ::PathFileExistsW((ad + L"\\weapons_icons").c_str()))
+                    ? (ad + L"\\weapons_icons") : (ExeDirW() + L"weapons_icons");
+            if (!::PathFileExistsW(probe.c_str())) {
+                // 只缺图标不致命，提一声就行，不用拦着不让用
+                LogLine("warning: weapons_icons folder missing, icons will show placeholders");
+            }
         }
     }
 

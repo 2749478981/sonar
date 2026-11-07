@@ -6,8 +6,8 @@
 <title>Sonar 配置工具</title>
   <!-- 浮窗页面（#overlay）：必须在首屏渲染前同步打上标记，否则会先闪一下完整界面 -->
   <script>if (location.hash === '#overlay') document.documentElement.className = 'overlay-mode';</script>
-<link rel="stylesheet" href="css/base.css?v=2.39.2">
-<link rel="stylesheet" href="css/themes.css?v=2.39.2">
+<link rel="stylesheet" href="css/base.css?v=2.39.3-dev1">
+<link rel="stylesheet" href="css/themes.css?v=2.39.3-dev1">
 </head>
 <body>
 <!-- 主题装饰层（可爱风显示爪印，其它主题为空） -->
@@ -236,7 +236,7 @@
       <input type="number" id="edFsm" class="num" title="-1 = 不限">
       <label class="inline"><input type="checkbox" id="edLmtAny"> LMT 不限</label>
     </div>
-    <div class="field"><span>LMT</span><input type="text" id="edLmt" placeholder="如 49265（逗号分隔多个；空 = 不限）"></div>
+    <div class="field"><span>LMT</span><input type="text" id="edLmt" placeholder="如 49265（多个用逗号分隔 = 命中任一即可；空或 -1 = 不限）"></div>
     <div class="field hint" id="edLmtHint"></div>
 
     <!-- 蓄力条目：只对大剑开放。不属于"高级设置"，因为它是一种条目类型 -->
@@ -533,8 +533,8 @@
 
 <div class="toasts" id="toasts"></div>
 
-<script src="js/mock.js?v=2.39.2"></script>
-<script src="js/app.js?v=2.39.2"></script>
-<script src="js/capture.js?v=2.39.2"></script>
+<script src="js/mock.js?v=2.39.3-dev1"></script>
+<script src="js/app.js?v=2.39.3-dev1"></script>
+<script src="js/capture.js?v=2.39.3-dev1"></script>
 </body>
 </html>
