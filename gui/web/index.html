@@ -6,8 +6,8 @@
 <title>Sonar 配置工具</title>
   <!-- 浮窗页面（#overlay）：必须在首屏渲染前同步打上标记，否则会先闪一下完整界面 -->
   <script>if (location.hash === '#overlay') document.documentElement.className = 'overlay-mode';</script>
-<link rel="stylesheet" href="css/base.css?v=2.39.4-dev2">
-<link rel="stylesheet" href="css/themes.css?v=2.39.4-dev2">
+<link rel="stylesheet" href="css/base.css?v=2.39.4-dev3">
+<link rel="stylesheet" href="css/themes.css?v=2.39.4-dev3">
 </head>
 <body>
 <!-- 主题装饰层（可爱风显示爪印，其它主题为空） -->
@@ -54,7 +54,7 @@
     <button data-act="combo.export">导出组合</button>
     <button data-act="combo.import">导入组合</button>
     <button data-act="sound.openDir">打开 sounds\</button>
-    <button data-act="win.bank" title="制作 nbnk：导入 → 替换音效 → 导出">nbnk制作</button>
+    <button data-act="win.bank" title="制作音效包（nbnk / npck）：导入 → 替换音效 → 导出">音效包制作</button>
     <span class="sep"></span>
     <span class="grow"></span>
     <label><input type="checkbox" id="gEnabled"> 总开关</label>
@@ -144,7 +144,7 @@
   <main id="mainBank" hidden>
     <div class="banktop">
       <button class="backbtn" data-act="bank.return" title="返回条目列表（也可以按 Esc）">← 返回条目列表</button>
-      <span class="banktitle">nbnk 制作</span>
+      <span class="banktitle">音效包制作</span>
       <span class="dim">换掉游戏里某条音效：导入 → 选音频 → 导出</span>
     </div>
 
@@ -152,9 +152,9 @@
       <div class="phead">nbnk 操作</div>
       <div class="rail-scroll">
         <div class="steps">
-          <button class="step" data-act="bank.pick"><b>1</b><span>导入 nbnk 文件</span></button>
+          <button class="step" data-act="bank.pick"><b>1</b><span>导入 nbnk / npck</span></button>
           <button class="step" data-act="bank.export" id="bankExportBtn2" disabled><b>2</b><span>转换并导出</span></button>
-          <div class="stephint" id="bankStepHint">先导入一个 nbnk 文件</div>
+          <div class="stephint" id="bankStepHint">先导入一个 nbnk / npck 文件</div>
         </div>
         <div class="railsec">更多</div>
         <div class="navlist">
@@ -167,19 +167,19 @@
     </aside>
 
     <section class="center box">
-      <div class="phead">nbnk 制作<span class="phead-right"><span id="bankHistRow"></span><label class="inline" title="勾上后，捕获列表只显示当前导入的这个 bank 的记录"><input type="checkbox" id="bankOnlyThis" checked> 捕获只显示本 bank</label></span></div>
+      <div class="phead">音效包制作<span class="phead-right"><span id="bankHistRow"></span><label class="inline" title="勾上后，捕获列表只显示当前导入的这个 bank 的记录"><input type="checkbox" id="bankOnlyThis" checked> 捕获只显示本 bank</label></span></div>
       <div class="bankpage">
         <div class="banksum">
-          <span id="bankSummary">还没有导入 nbnk</span>
+          <span id="bankSummary">还没有导入 nbnk / npck</span>
           <span id="bankEnv" class="banksum-env">转换环境：检查中…</span>
         </div>
 
         <div class="bankempty" id="bankEmpty">
           <div class="beicon">♪</div>
-          <p class="betitle">导入一个 nbnk，开始换音效</p>
-          <p class="betip">nbnk 在游戏的 <code>nativePC\sound\wwise\Windows\</code> 里，也可以从别人的 Mod 压缩包（zip / rar）里拿。</p>
+          <p class="betitle">导入一个 nbnk / npck，开始换音效</p>
+          <p class="betip">nbnk（SoundBank）与 npck（文件包）都在游戏的 <code>nativePC\sound\wwise\Windows\</code> 里，也可以从别人的 Mod 压缩包（zip / rar）里拿。</p>
           <p class="betip">只把新文件写进输出目录，<b>不会改动游戏原文件</b>。</p>
-          <button class="primary" data-act="bank.pick">选择 nbnk 文件…</button>
+          <button class="primary" data-act="bank.pick">选择 nbnk / npck 文件…</button>
         </div>
 
         <div class="bankwork" id="bankWork" hidden>
@@ -560,8 +560,8 @@
 
 <div class="toasts" id="toasts"></div>
 
-<script src="js/mock.js?v=2.39.4-dev2"></script>
-<script src="js/app.js?v=2.39.4-dev2"></script>
-<script src="js/capture.js?v=2.39.4-dev2"></script>
+<script src="js/mock.js?v=2.39.4-dev3"></script>
+<script src="js/app.js?v=2.39.4-dev3"></script>
+<script src="js/capture.js?v=2.39.4-dev3"></script>
 </body>
 </html>

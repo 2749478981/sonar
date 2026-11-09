@@ -21,8 +21,9 @@ namespace bankmod {
 
 struct MediaEntry {
     uint32_t id = 0;        // media id（wem 的唯一标识）
-    uint32_t offset = 0;    // 相对 DATA 起点
+    uint32_t offset = 0;    // nbnk：相对 DATA 起点；npck：文件内绝对偏移
     uint32_t size = 0;      // wem 字节数
+    uint32_t language = 0;  // npck 专用（语言枚举）
     int      seq = 0;       // 在 bank 里第几个（1-based）
 };
 
@@ -32,12 +33,25 @@ struct BankFile {
     std::vector<uint8_t> bytes;
     std::vector<MediaEntry> media;
 
+    // ---- SoundBank（nbnk）----
     // 段位置（用于导出时重建）
     size_t bkhdPos = 0, bkhdLen = 0;
     size_t didxPos = 0, didxLen = 0;
     size_t dataPos = 0, dataLen = 0;
     size_t hircPos = 0, hircLen = 0;
     std::vector<std::pair<std::string, size_t>> otherChunks;   // 未知段：tag + 位置（原样保留）
+
+    // ---- File Package（npck / AKPK）----
+    //  结构：AKPK 头 -> 语言表 -> bnk 表 -> wem 表(count + 每条 20B) -> 头尾结构 -> 各 wem 数据
+    //  导出时只重建 wem 表里的 offset/size，其余字节原样搬。
+    bool isPackage = false;
+    uint32_t pkgUnkn2 = 1;
+    std::vector<uint8_t> pkgLangTable;   // 语言表原始字节
+    std::vector<uint8_t> pkgBnkTable;    // bnk 表原始字节（Capcom 通常是 4 字节 0）
+    std::vector<uint8_t> pkgTail;        // wem 表之后、数据区之前的 unknStruct 字节
+
+    // 导出时用的扩展名（nbnk / npck）
+    const char* Ext() const { return isPackage ? "npck" : "nbnk"; }
 };
 
 // 解析 nbnk（只读，失败时 err 有说明）

@@ -908,7 +908,7 @@ function wemInBank(r) {
 // 捕获行点击：条目页 = 加入条目；nbnk 制作页 = 播放这个 nbnk 里对应的 wem
 function wemRowClick(r) {
   if (ST.bankPage) {
-    if (!BANK.path) { toast('先在左边导入一个 nbnk', 'err'); return; }
+    if (!BANK.path) { toast('先在左边导入一个 nbnk / npck', 'err'); return; }
     Backend.call('bank.play', { path: BANK.path, media: r.wemMedia })
       .then(() => toast('播放 media ' + r.wemMedia + (r.bank ? '（' + r.bank + '）' : ''), 'ok', 'play'))
       .catch(e => toast(e.message || '播放失败', 'err'));
@@ -969,8 +969,8 @@ function renderBankShell() {
     if (empty) empty.hidden = false;
     if (work) work.hidden = true;
     if (step2) { step2.disabled = true; step2.classList.remove('ready'); }
-    if (hint) hint.textContent = '先导入一个 nbnk 文件';
-    if (sum) { sum.textContent = '还没有导入 nbnk'; sum.title = ''; }
+    if (hint) hint.textContent = '先导入一个 nbnk / npck 文件';
+    if (sum) { sum.textContent = '还没有导入 nbnk / npck'; sum.title = ''; }
     const fc0 = $('#bankFilterCount'); if (fc0) fc0.textContent = '';
     const mh0 = $('#bankMediaHint'); if (mh0) mh0.textContent = '';
     return;
@@ -978,12 +978,12 @@ function renderBankShell() {
   if (empty) empty.hidden = true;
   if (work) work.hidden = false;
   if (sum) {
-    sum.textContent = `已导入 ${BANK.name}.nbnk　共 ${BANK.media.length} 条　已替换 ${nRep} 条`;
+    sum.textContent = `已导入 ${BANK.name}.${BANK.ext || 'nbnk'}（${BANK.package ? '文件包 npck' : 'SoundBank'}）　共 ${BANK.media.length} 条　已替换 ${nRep} 条`;
     sum.title = BANK.path;
   }
   if (step2) { step2.disabled = nRep === 0; step2.classList.toggle('ready', nRep > 0); }
   if (hint) hint.textContent = nRep
-    ? `已选 ${nRep} 条替换 —— 点这里生成 nbnk`
+    ? `已选 ${nRep} 条替换 —— 点这里生成 ${BANK.ext || 'nbnk'}`
     : `已导入 ${BANK.media.length} 条：给要换的那条点「选音频」`;
 }
 
@@ -1048,7 +1048,7 @@ function renderBank() {
   if (mh) mh.textContent = rows.length > show.length ? `显示前 ${show.length} 条` : '';
   $('#bankFoot2').textContent =
     `${BANK.media.length} 条 media · 已选 ${bankRepCount()} 条替换` +
-    (bankRepCount() ? ' · 点「转换并导出」生成 nbnk' : '');
+    (bankRepCount() ? (' · 点「转换并导出」生成 ' + (BANK.ext || 'nbnk')) : '');
 }
 
 { const s = $('#bankSearch'); if (s) s.oninput = () => { bankQuery = s.value || ''; renderBank(); }; }
@@ -2470,14 +2470,16 @@ ACTIONS['bank.pick'] = async () => {
     const info = await Backend.call('bank.inspect', { path: r.path });
     BANK.path = r.path;
     BANK.name = info.bank;
+    BANK.ext = info.ext || 'nbnk';        // npck = Wwise 文件包；导出时沿用同一个扩展名
+    BANK.package = !!info.package;
     BANK.media = info.media || [];
     BANK.histSaved = false;
-    bankShowHistory();   // 同一个 nbnk：显示上次替换了哪些 wem（可一键恢复）
+    bankShowHistory();   // 同一个文件：显示上次替换了哪些 wem（可一键恢复）
     BANK.reps = {};
     renderBank();
     if (!info.hasWwise)
       toast('没检测到 Wwise —— 生成 wem 需要它（可只替换已经是 wem 的文件）', 'err');
-    else toast(`已导入 ${info.bank}.nbnk（${BANK.media.length} 条 media）`, 'ok');
+    else toast(`已导入 ${info.bank}.${BANK.ext}（${BANK.media.length} 条 media）`, 'ok');
   } catch (e) {
     renderBank();
     // 导入失败的原因可能有好几行（文件大小 / 开头字节 / 建议），用弹窗而不是小提示条
@@ -2505,7 +2507,7 @@ ACTIONS['bank.openOut'] = async () => {
 };
 
 ACTIONS['bank.export'] = async () => {
-  if (!BANK.path) { toast('先导入 nbnk', 'err'); return; }
+  if (!BANK.path) { toast('先导入 nbnk / npck', 'err'); return; }
   const mediaIds = Object.keys(BANK.reps);
   if (!mediaIds.length) { toast('还没有选任何替换音效', 'err'); return; }
   const btn = ($('#bankExportBtn2') || $('#bankExportBtn'));
@@ -2551,7 +2553,7 @@ ACTIONS['bank.export'] = async () => {
 
 // 把导出的 nbnk 打包成可直接分享的 Mod 压缩包（结构从 nativePC 开始）
 ACTIONS['bank.exportModZip'] = async () => {
-  if (!BANK.path) { toast('先导入一个 nbnk', 'err'); return; }
+  if (!BANK.path) { toast('先导入一个 nbnk / npck', 'err'); return; }
   try {
     const r = await Backend.call('bank.exportModZip', { path: BANK.path });
     if (r.cancelled) return;
@@ -2819,13 +2821,17 @@ function pvApply(st) {
   const dur = (st && st.dur) || 0;
   const pos = (st && st.pos) || 0;
   PV.dur = dur;
-  if (!playing && dur <= 0) { bar.hidden = true; return; }
+  // 没在播就不显示：否则被打断的那条会留下"0:00 / 0:37"这种停在开头的残影
+  if (!playing) { bar.hidden = true; return; }
   bar.hidden = false;
   const nm = $('#pvName');
   if (nm) { nm.textContent = (st && st.name) || '试听中…'; nm.title = (st && st.path) || ''; }
+  const pct = dur > 0 ? Math.max(0, Math.min(100, pos / dur * 100)) : 0;
   const sk = $('#pvSeek');
-  if (sk && !PV.dragging)
-    sk.value = String(dur > 0 ? Math.max(0, Math.min(1000, Math.round(pos / dur * 1000))) : 0);
+  if (sk && !PV.dragging) {
+    sk.value = String(Math.round(pct * 10));
+    sk.style.setProperty('--pv', pct.toFixed(1) + '%');
+  }
   const tm = $('#pvTime');
   if (tm) tm.textContent = pvFmt(pos) + ' / ' + pvFmt(dur);
 }
@@ -2846,6 +2852,7 @@ async function pvPoll() {
     // 拖动时先只改显示，松手（change）才真的跳转 —— 否则每移动 1px 都重开一次声部
     sk.addEventListener('input', () => {
       PV.dragging = true;
+      sk.style.setProperty('--pv', Math.max(0, Math.min(100, Number(sk.value) / 10)).toFixed(1) + '%');
       const tm = $('#pvTime');
       if (tm) tm.textContent = pvFmt(PV.dur * sk.value / 1000) + ' / ' + pvFmt(PV.dur);
     });

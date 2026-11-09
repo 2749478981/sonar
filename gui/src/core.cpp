@@ -859,6 +859,12 @@ std::atomic<int> gPvOwnerId{ 0 };           // 正在驱动播放条的那个声
 void StopAllPreview() {
     gPvStopEpoch.fetch_add(1, std::memory_order_relaxed);
     ::PlaySoundW(nullptr, nullptr, 0);
+    // ★ 停掉之后要把播放条的状态清零：否则下次播一条**更短**的音效时，
+    //   `durMs >= gPvDurMs` 永远不成立 → 新声部不当 owner → 播放条还挂着上一条
+    //   的名字和时长，进度就停在 0:00 不动（用户报过"进度条卡住"）。
+    gPvDurMs.store(0, std::memory_order_relaxed);
+    gPvPosMs.store(0, std::memory_order_relaxed);
+    gPvOwnerId.store(0, std::memory_order_relaxed);
 }
 
 struct PvCtx {
@@ -915,7 +921,20 @@ DWORD WINAPI PvWorker(LPVOID param) {
 
     // ---- 播放状态：总长 + 本次声部的起点（界面底部播放条画进度用）----
     const int rate = pcm.rate > 0 ? (int)pcm.rate : 48000;
-    const int ch = pcm.channels > 0 ? (int)pcm.channels : 1;
+    int ch = pcm.channels > 0 ? (int)pcm.channels : 1;
+    // 多声道（5.1 的 BGM 很常见）waveOut 经常直接拒绝打开 → 表现出来就是"点了没声音、
+    // 播放条也不动"。先降到立体声（取前两条声道）再播。
+    if (ch > 2) {
+        const std::size_t srcFrames = pcm.samples.size() / (std::size_t)ch;
+        std::vector<std::int16_t> st2(srcFrames * 2);
+        for (std::size_t f = 0; f < srcFrames; ++f) {
+            const std::int16_t* src = pcm.samples.data() + f * (std::size_t)ch;
+            st2[f * 2] = src[0];
+            st2[f * 2 + 1] = src[1];
+        }
+        pcm.samples.swap(st2);
+        ch = 2;
+    }
     const std::size_t frames = pcm.samples.size() / (std::size_t)ch;
     const int durMs = (int)((long long)frames * 1000 / rate);
     std::size_t skipFrames = 0;
@@ -927,7 +946,7 @@ DWORD WINAPI PvWorker(LPVOID param) {
     // 叠加预览（条目「整体效果」会同时播固定音效 + 随机一条）时只让**最长的那条**驱动播放条：
     // 否则短的那条先播完就把进度写成"满/0"，看起来就是"进度条卡住不动"。
     const int myId = gPvNextId.fetch_add(1, std::memory_order_relaxed);
-    const bool owner = (durMs >= gPvDurMs.load(std::memory_order_relaxed));
+const bool owner = (durMs >= gPvDurMs.load(std::memory_order_relaxed));
     if (owner) {
         std::lock_guard<std::mutex> lk(gPvMx);
         gPvPath = ctx->path;
@@ -960,20 +979,26 @@ DWORD WINAPI PvWorker(LPVOID param) {
 
     WAVEFORMATEX wfx{};
     wfx.wFormatTag = WAVE_FORMAT_PCM;
-    wfx.nChannels = (WORD)pcm.channels;
-    wfx.nSamplesPerSec = (DWORD)pcm.rate;
+    wfx.nChannels = (WORD)ch;              // ★ 降混后的声道数（写原始声道数会让 6ch BGM 打不开设备）
+    wfx.nSamplesPerSec = (DWORD)rate;
     wfx.wBitsPerSample = 16;
-    wfx.nBlockAlign = (WORD)((16 / 8) * pcm.channels);
-    wfx.nAvgBytesPerSec = pcm.rate * wfx.nBlockAlign;
-    HWAVEOUT hwo = nullptr;
-    if (::waveOutOpen(&hwo, WAVE_MAPPER, &wfx, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) return 0;
+    wfx.nBlockAlign = (WORD)((16 / 8) * ch);
+    wfx.nAvgBytesPerSec = (DWORD)(rate * wfx.nBlockAlign);
 
     // 从起点开始播（拖进度条之后 startMs > 0：解码还是整段解，只是丢掉前面 skip 帧）
     const std::size_t fromSample = skipFrames * (std::size_t)ch;
     const std::size_t leftSamples = pcm.samples.size() - fromSample;
-    if (leftSamples == 0) { ::waveOutClose(hwo); return 0; }
+    if (leftSamples == 0) return 0;
     std::vector<std::uint8_t> bytes(leftSamples * 2);
     std::memcpy(bytes.data(), pcm.samples.data() + fromSample, bytes.size());
+
+HWAVEOUT hwo = nullptr;
+    if (::waveOutOpen(&hwo, WAVE_MAPPER, &wfx, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+        // 实在打不开设备（被独占 / 不支持的格式）：退回 PlaySound 至少让它响，
+        // 只是这一条没有进度显示。
+::PlaySoundW((LPCWSTR)bytes.data(), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+        return 0;
+    }
     WAVEHDR hdr{};
     hdr.lpData = (LPSTR)bytes.data();
     hdr.dwBufferLength = (DWORD)bytes.size();
@@ -981,7 +1006,7 @@ DWORD WINAPI PvWorker(LPVOID param) {
         ::waveOutClose(hwo);
         return 0;
     }
-    ::waveOutWrite(hwo, &hdr, sizeof(hdr));
+::waveOutWrite(hwo, &hdr, sizeof(hdr));
     while ((hdr.dwFlags & WHDR_DONE) == 0) {
         ::Sleep(10);
         if (gPvStopEpoch.load(std::memory_order_relaxed) != myEpoch) {
@@ -1003,7 +1028,7 @@ DWORD WINAPI PvWorker(LPVOID param) {
         gPvPosMs.store(durMs, std::memory_order_relaxed);
         gPvOwnerId.store(0, std::memory_order_relaxed);
     }
-    ::waveOutUnprepareHeader(hwo, &hdr, sizeof(hdr));
+::waveOutUnprepareHeader(hwo, &hdr, sizeof(hdr));
     ::waveOutClose(hwo);
     return 0;
 }
@@ -1060,7 +1085,7 @@ static std::string BankLoadHint(const std::string& path, const std::string& err)
     else if (got >= 4 && head[0] == 'B' && head[1] == 'K' && head[2] == 'H' && head[3] == 'D')
         msg += "\n开头是 BKHD（确实是 nbnk），可能是文件不完整：重新解包或重新下载一个试试。";
     else if (sz.QuadPart > 0)
-        msg += "\n这不是 Wwise SoundBank（nbnk 的开头必须是 BKHD）。";
+        msg += "\n既不是 nbnk（开头 BKHD），也不是 npck（开头 AKPK）：确认文件没被改过、没被别的工具重打包。";
     return msg;
 }
 
@@ -6043,7 +6068,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
         if (method == "bank.pick") {
             std::vector<std::string> multi;
             const std::string p1 = OpenFileDialog(OwnerOf(owner),
-                L"Wwise SoundBank (*.nbnk;*.bnk)\0*.nbnk;*.bnk\0所有文件 (*.*)\0*.*\0", nullptr, L"nbnk",
+                L"Wwise 音频文件 (*.nbnk;*.npck;*.bnk)\0*.nbnk;*.npck;*.bnk\0Wwise SoundBank (*.nbnk;*.bnk)\0*.nbnk;*.bnk\0Wwise File Package (*.npck)\0*.npck\0所有文件 (*.*)\0*.*\0", nullptr, L"nbnk",
                 false, multi);
             JVal d = JVal::obj();
             d.set("cancelled", JVal(p1.empty()));
@@ -6095,9 +6120,53 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             JVal d = JVal::obj();
             d.set("bank", JVal(bf.name));
             d.set("path", JVal(ToSlash(path)));
+            d.set("package", JVal(bf.isPackage));          // true = npck（文件包），false = nbnk
+            d.set("ext", JVal(std::string(bf.Ext())));
             d.set("count", JVal((int)bf.media.size()));
             d.set("media", arr);
             d.set("hasWwise", JVal(!bankmod::FindWwiseConsole().empty()));
+            return OkJson(d);
+        }
+
+        if (method == "bank.selftest") {
+            // 诊断：解析一个 nbnk/npck，并在"没有替换"的情况下重建一次，和原文件逐字节比较。
+            //  重建逻辑（尤其 npck 的 wem 表 offset）有没有写坏，靠这个当场就能看出来。
+            const std::string path = Trim(p.optStr("path"));
+            if (path.empty()) return ErrJson("缺少 path");
+            bankmod::BankFile bf;
+            std::string err;
+            if (!bankmod::LoadBank(Utf8ToWide(path), bf, err)) return ErrJson(BankLoadHint(path, err));
+            JVal d = JVal::obj();
+            d.set("package", JVal(bf.isPackage));
+            d.set("count", JVal((int)bf.media.size()));
+            d.set("size", JVal((long long)bf.bytes.size()));
+            const std::wstring tmp = Utf8ToWide(im->exeDir) + L"wemkit\\_selftest." + Utf8ToWide(bf.Ext());
+            std::string e2;
+            if (!bankmod::ExportBank(bf, std::vector<std::pair<uint32_t, std::wstring>>(), tmp, e2)) {
+                d.set("roundTrip", JVal(false));
+                d.set("detail", JVal(e2));
+                return OkJson(d);
+            }
+            std::vector<std::uint8_t> a;
+            {
+                HANDLE h = ::CreateFileW(tmp.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                         FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (h != INVALID_HANDLE_VALUE) {
+                    LARGE_INTEGER sz{};
+                    ::GetFileSizeEx(h, &sz);
+                    a.resize((std::size_t)(sz.QuadPart > 0 ? sz.QuadPart : 0));
+                    DWORD rd = 0;
+                    if (!a.empty())
+                        ::ReadFile(h, a.data(), (DWORD)a.size(), &rd, nullptr), a.resize(rd);
+                    ::CloseHandle(h);
+                }
+            }
+            ::DeleteFileW(tmp.c_str());
+            const bool same = (a == bf.bytes);
+            d.set("roundTrip", JVal(same));
+            d.set("detail", JVal(same ? std::string("逐字节相同")
+                                      : ("原始 " + std::to_string((long long)bf.bytes.size()) + " 字节，重建 " +
+                                         std::to_string((long long)a.size()) + " 字节")));
             return OkJson(d);
         }
 
@@ -6205,7 +6274,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             if (reps.empty()) {
                 // ★ 没有替换音效：直接把原 bank 复制到输出目录（用户可能只是想放进去听效果）
                 ::CreateDirectoryW(outDirW0.c_str(), nullptr);
-                const std::wstring dst0 = outDirW0 + L"\\" + Utf8ToWide(bf.name) + L".nbnk";
+                const std::wstring dst0 = outDirW0 + L"\\" + Utf8ToWide(bf.name) + L"." + Utf8ToWide(bf.Ext());
                 if (!::CopyFileW(Utf8ToWide(path).c_str(), dst0.c_str(), FALSE)) return ErrJson("复制到输出目录失败");
                 JVal d0 = JVal::obj();
                 d0.set("out", JVal(ToSlash(Utf8FromWide(dst0))));
@@ -6219,7 +6288,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             else if (!im->cfg.global.bankOutDir.empty()) outDirW = Utf8ToWide(im->cfg.global.bankOutDir);
             else outDirW = Utf8ToWide(im->BaseDir()) + L"wemmod";
             ::CreateDirectoryW(outDirW.c_str(), nullptr);
-            const std::wstring outPath = outDirW + L"\\" + Utf8ToWide(bf.name) + L".nbnk";
+            const std::wstring outPath = outDirW + L"\\" + Utf8ToWide(bf.name) + L"." + Utf8ToWide(bf.Ext());
             if (!bankmod::ExportBank(bf, reps, outPath, err)) return ErrJson(err);
             JVal d = JVal::obj();
             d.set("out", JVal(ToSlash(Utf8FromWide(outPath))));

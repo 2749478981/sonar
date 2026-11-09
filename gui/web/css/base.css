@@ -852,7 +852,18 @@ td .enbox{width:15px; height:15px; margin:0 7px 0 0; vertical-align:middle; curs
 .pvbar .pvicon{flex:none; width:16px; text-align:center; color:var(--accent); font-weight:800}
 .pvbar .pvname{flex:none; max-width:34vw; overflow:hidden; text-overflow:ellipsis;
                white-space:nowrap; font-size:12px; font-weight:600}
-.pvbar .pvseek{flex:1; min-width:120px; accent-color:var(--accent); cursor:pointer}
+/* 进度条自己画（不用 accent-color）：颜色填充宽度由 JS 写的 --pv 决定，
+   这样填充、滑块、显示的时间三者永远是同一个数，不会出现"滑块在 20%、蓝条到 75%" */
+.pvbar .pvseek{flex:1; min-width:120px; height:16px; -webkit-appearance:none; appearance:none;
+               background:transparent; cursor:pointer; --pv:0%}
+.pvbar .pvseek::-webkit-slider-runnable-track{height:6px; border-radius:3px;
+  background:linear-gradient(to right, var(--accent) 0 var(--pv), var(--line) var(--pv) 100%)}
+.pvbar .pvseek::-webkit-slider-thumb{-webkit-appearance:none; appearance:none;
+  width:13px; height:13px; margin-top:-3.5px; border-radius:50%;
+  background:var(--panel); border:2.5px solid var(--accent);
+  box-shadow:0 1px 3px rgba(0,0,0,.22)}
+.pvbar .pvseek:focus{outline:none}
+.pvbar .pvseek:focus::-webkit-slider-thumb{box-shadow:0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent)}
 .pvbar .pvtime{flex:none; font-size:11.5px; color:var(--muted);
                font-variant-numeric:tabular-nums}
 .pvbar .pvsbtn{flex:none; padding:3px 10px; font-size:11.5px}
