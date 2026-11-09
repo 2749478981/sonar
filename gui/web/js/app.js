@@ -933,38 +933,69 @@ async function addWemRecord(r) {
    =========================================================================== */
 const BANK = { path: '', name: '', media: [], reps: {}, histSaved: false };   // histSaved: 本次替换是否已写进记录   // reps: mediaId -> 音频路径
 let playingMedia = 0;                                       // 正在 GUI 内播放的 media（0=无）
+let bankQuery = '';                                         // 列表搜索词（名称 / media id / 序号）
+let bankOnlyReplaced = false;                               // 只看已选替换的条目
 
 function bankRepCount() { return Object.keys(BANK.reps).length; }
+function bankMediaName(m) { return m.custom ? m.name : (m.note || '—'); }
 
-function renderBank() {
-  const info = $('#bankInfo');
-  const tb = $('#bankBody2') || $('#bankBody');
-  tb.innerHTML = '';
+// 摘要条 / 空态 / 左侧步骤按钮：导入状态一变就刷新
+function renderBankShell() {
+  const nRep = bankRepCount();
+  const sum = $('#bankSummary'), empty = $('#bankEmpty'), work = $('#bankWork');
+  const step2 = $('#bankExportBtn2'), hint = $('#bankStepHint');
   if (!BANK.path) {
-    info.textContent = '还没有导入 nbnk。点「导入 nbnk…」选一个 sound bank 文件。';
-    $('#bankFoot2').textContent = '';
+    if (empty) empty.hidden = false;
+    if (work) work.hidden = true;
+    if (step2) { step2.disabled = true; step2.classList.remove('ready'); }
+    if (hint) hint.textContent = '先导入一个 nbnk 文件';
+    if (sum) { sum.textContent = '还没有导入 nbnk'; sum.title = ''; }
+    const fc0 = $('#bankFilterCount'); if (fc0) fc0.textContent = '';
+    const mh0 = $('#bankMediaHint'); if (mh0) mh0.textContent = '';
     return;
   }
-  info.textContent = `已导入：${BANK.name}.nbnk（${BANK.media.length} 条 media）\n${BANK.path}\n` +
-    `已选替换：${bankRepCount()} 条 · 导出目录：plugins\\WeaponSoundEnhance\\wemmod\\（可改）`;
+  if (empty) empty.hidden = true;
+  if (work) work.hidden = false;
+  if (sum) {
+    sum.textContent = `已导入 ${BANK.name}.nbnk　共 ${BANK.media.length} 条　已替换 ${nRep} 条`;
+    sum.title = BANK.path;
+  }
+  if (step2) { step2.disabled = nRep === 0; step2.classList.toggle('ready', nRep > 0); }
+  if (hint) hint.textContent = nRep
+    ? `已选 ${nRep} 条替换 —— 点这里生成 nbnk`
+    : `已导入 ${BANK.media.length} 条：给要换的那条点「选音频」`;
+}
+
+function renderBank() {
+  const tb = $('#bankBody2') || $('#bankBody');
+  if (tb) tb.innerHTML = '';
+  renderBankShell();
+  if (!BANK.path) { const f = $('#bankFoot2'); if (f) f.textContent = ''; return; }
   // ★ 已命名的（用户命名库里的）默认排前面，其次按 bank 内序号
   const sorted = BANK.media.slice().sort((a, b) => {
     const ca = a.custom ? 1 : 0, cb = b.custom ? 1 : 0;
     if (ca !== cb) return cb - ca;
     return (a.seqInBank || a.seq || 0) - (b.seqInBank || b.seq || 0);
   });
-  const show = sorted.slice(0, 800);
+  const q = bankQuery.trim().toLowerCase();
+  const rows = sorted.filter(m => {
+    if (bankOnlyReplaced && !BANK.reps[m.id]) return false;
+    if (!q) return true;
+    return String(m.id).includes(q) || String(m.seqInBank || m.seq).includes(q)
+        || bankMediaName(m).toLowerCase().includes(q);
+  });
+  const show = rows.slice(0, 800);
   show.forEach(m => {
     const rep = BANK.reps[m.id] || '';
     tb.appendChild(h('tr', {},
       h('td', { class: 'lmt' }, String(m.seqInBank || m.seq)),
-      h('td', {}, h('span', { class: 'nm', title: m.custom ? m.name : '', text: m.custom ? m.name : (m.note || '—') })),
+      h('td', {}, h('span', { class: 'nm', title: m.custom ? m.name : '', text: bankMediaName(m) })),
       h('td', { class: 'fsm', style: 'color:var(--c-blue)' }, String(m.id)),
       h('td', { class: 'lmt' }, String(m.size)),
       h('td', { title: rep, style: 'max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
         rep ? rep.split(/[\\/]/).pop() : '—'),
       h('td', {}, h('div', { class: 'acts' },
-        h('button', { title: '在 GUI 内直接播放这条 wem', onclick: async (ev) => {
+        h('button', { title: '在 GUI 内直接播放这条 wem（底部播放条可拖进度）', onclick: async (ev) => {
           try {
             const r = await Backend.call('bank.play', { path: BANK.path, media: m.id });
             if (!r.played) toast('播放失败（解码器可能没就位）', 'err');
@@ -990,9 +1021,17 @@ function renderBank() {
         } }, '选音频'),
         rep ? h('button', { class: 'del', onclick: () => { delete BANK.reps[m.id]; renderBank(); } }, '取消') : null))));
   });
+  const fc = $('#bankFilterCount');
+  if (fc) fc.textContent = (q || bankOnlyReplaced) ? `筛选出 ${rows.length} 条` : '';
+  const mh = $('#bankMediaHint');
+  if (mh) mh.textContent = rows.length > show.length ? `显示前 ${show.length} 条` : '';
   $('#bankFoot2').textContent =
-    `${BANK.media.length} 条 media（显示前 ${show.length} 条）· 已选 ${bankRepCount()} 条替换`;
+    `${BANK.media.length} 条 media · 已选 ${bankRepCount()} 条替换` +
+    (bankRepCount() ? ' · 点「转换并导出」生成 nbnk' : '');
 }
+
+{ const s = $('#bankSearch'); if (s) s.oninput = () => { bankQuery = s.value || ''; renderBank(); }; }
+{ const c = $('#bankOnlyReplaced'); if (c) c.onchange = () => { bankOnlyReplaced = !!c.checked; renderBank(); }; }
 
 
 // 捕获面板按 bank 过滤（导入 bank 后可只看它的事件）
@@ -2278,7 +2317,7 @@ function bankRepsToArr() {
 document.addEventListener('click', e => {
   const t = e.target;
   if (!t || !t.closest) return;
-  const inHdr = t.closest('#bankHistRow') || t.closest('.bankhdr-right label');
+  const inHdr = t.closest('#bankHistRow') || t.closest('.phead-right label');
   if (inHdr) { const sm = t.closest('summary'); if (sm) e.preventDefault(); }
 });
 
@@ -2371,7 +2410,7 @@ async function refreshConvertEnv() {
     }
     const brief = document.querySelector('#bankEnvBrief');
     if (brief) brief.textContent = r.hasWwise ? '（Wwise ✓）' : '（未检测到 Wwise）';
-    el.className = r.hasWwise ? 'note ok' : 'note warn';
+    el.className = 'banksum-env' + (r.hasWwise ? ' ok' : ' warn');
   } catch (e) { el.textContent = ''; }
 }
 
@@ -2417,7 +2456,11 @@ ACTIONS['bank.pick'] = async () => {
     if (!info.hasWwise)
       toast('没检测到 Wwise —— 生成 wem 需要它（可只替换已经是 wem 的文件）', 'err');
     else toast(`已导入 ${info.bank}.nbnk（${BANK.media.length} 条 media）`, 'ok');
-  } catch (e) { toast('导入失败：' + e.message, 'err'); }
+  } catch (e) {
+    renderBank();
+    // 导入失败的原因可能有好几行（文件大小 / 开头字节 / 建议），用弹窗而不是小提示条
+    await confirmBox({ title: '导入失败', okText: '知道了', danger: false, message: e.message });
+  }
 };
 
 ACTIONS['bank.clear'] = () => { BANK.reps = {}; renderBank(); toast('已清空替换列表'); };
@@ -2478,11 +2521,10 @@ ACTIONS['bank.export'] = async () => {
       BANK.histSaved = true;
       bankShowHistory();
     } catch (err) {}
-    $('#bankInfo').textContent =
-      `导出完成：${out.out}\n把该 nbnk 放到 游戏目录\\nativePC\\sound\\wwise\\Windows\\ 下即可生效。`;
+    { const s = $('#bankSummary'); if (s) { s.textContent = `导出完成 → ${out.out}`; s.title = out.out; } }
   } catch (e) {
     toast('导出失败：' + e.message, 'err');
-  } finally { btn.disabled = false; }
+  } finally { btn.disabled = false; renderBankShell(); }
 };
 
 // 把导出的 nbnk 打包成可直接分享的 Mod 压缩包（结构从 nativePC 开始）
@@ -2735,6 +2777,79 @@ Backend.onEvent(ev => {
     toast('初始化失败：' + e.message, 'err');
   }
 })();
+
+/* ===========================================================================
+   底部播放条：试听时显示进度，可以拖动跳转
+   —— 后端 sound.preview / bank.play / audio.playFile 都走同一条 waveOut 播放链，
+      所以上面任何一个入口点「试听」都会让这条播放条出现。
+   =========================================================================== */
+const PV = { dur: 0, pos: 0, dragging: false, timer: null };
+
+function pvFmt(ms) {
+  const s = Math.max(0, Math.round((ms || 0) / 1000));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+function pvApply(st) {
+  const bar = $('#pvBar');
+  if (!bar) return;
+  const playing = !!(st && st.playing);
+  const dur = (st && st.dur) || 0;
+  const pos = (st && st.pos) || 0;
+  PV.dur = dur;
+  if (!playing && dur <= 0) { bar.hidden = true; return; }
+  bar.hidden = false;
+  const nm = $('#pvName');
+  if (nm) { nm.textContent = (st && st.name) || '试听中…'; nm.title = (st && st.path) || ''; }
+  const sk = $('#pvSeek');
+  if (sk && !PV.dragging)
+    sk.value = String(dur > 0 ? Math.max(0, Math.min(1000, Math.round(pos / dur * 1000))) : 0);
+  const tm = $('#pvTime');
+  if (tm) tm.textContent = pvFmt(pos) + ' / ' + pvFmt(dur);
+}
+
+async function pvPoll() {
+  let st = null;
+  try { st = await Backend.call('sound.previewState', {}); } catch (e) { st = null; }
+  pvApply(st);
+  clearTimeout(PV.timer);
+  PV.timer = setTimeout(pvPoll, (st && st.playing) ? 250 : 1200);
+}
+
+(function pvInit() {
+  const bar = $('#pvBar');
+  if (!bar) return;
+  const sk = $('#pvSeek');
+  if (sk) {
+    // 拖动时先只改显示，松手（change）才真的跳转 —— 否则每移动 1px 都重开一次声部
+    sk.addEventListener('input', () => {
+      PV.dragging = true;
+      const tm = $('#pvTime');
+      if (tm) tm.textContent = pvFmt(PV.dur * sk.value / 1000) + ' / ' + pvFmt(PV.dur);
+    });
+    sk.addEventListener('change', async () => {
+      PV.dragging = false;
+      const ms = Math.round(PV.dur * sk.value / 1000);
+      try { await Backend.call('sound.previewSeek', { ms }); }
+      catch (e) { toast('拖动失败：' + e.message, 'err'); }
+      clearTimeout(PV.timer); pvPoll();
+    });
+  }
+  const sb = $('#pvStop');
+  if (sb) sb.onclick = async () => {
+    try { await Backend.call('sound.previewStop', {}); } catch (e) {}
+    bar.hidden = true;
+    clearTimeout(PV.timer);
+    setTimeout(pvPoll, 1200);
+  };
+  pvPoll();
+})();
+
+// 其它地方（切条目 / Esc）也能一键停掉试听
+window.__pvStop = async () => {
+  try { await Backend.call('sound.previewStop', {}); } catch (e) {}
+  const b = $('#pvBar'); if (b) b.hidden = true;
+};
 
 /* ===========================================================================
    导出给独立模块（js/capture.js）用的最小 API。

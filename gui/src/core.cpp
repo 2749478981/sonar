@@ -841,15 +841,32 @@ std::string ZipExtractTo(const std::wstring& zipPath, const std::string& extDir)
 // （以前试听是 while(WHDR_DONE) Sleep(10) 死等，界面上的"停止音效"根本停不掉它。）
 std::atomic<unsigned long long> gPvStopEpoch{ 0 };
 
+// 试听播放状态：界面底部的播放条靠它画进度、拖进度。
+//   pos 由 waveOutGetPosition 的"已播样点数"换算 —— 画出来的进度和耳朵听到的位置一致，
+//   不用自己按墙钟估算（估算会因为设备缓冲偏 100~300ms）。
+//   拖进度 = 从新位置**重开一个声部**（动解码后 PCM 的起点），所以拖完有极短的重新解码间隙。
+std::mutex gPvMx;
+std::wstring gPvPath;                       // 正在试听的文件（空 = 内存源）
+std::string gPvName;                        // 播放条上显示的名字
+std::shared_ptr<std::vector<unsigned char>> gPvBuf;   // 内存源（bank wem / 解码后的 wav）
+float gPvGain = 1.0f;                       // 它的增益（拖动后要用同一个增益重开）
+std::atomic<int> gPvDurMs{ 0 };             // 总时长（0 = 还没有在播）
+std::atomic<int> gPvPosMs{ 0 };             // 当前位置
+std::atomic<bool> gPvBusy{ false };         // 有声音正在播（播放条显示/隐藏靠它）
+
 void StopAllPreview() {
     gPvStopEpoch.fetch_add(1, std::memory_order_relaxed);
+    gPvBusy.store(false, std::memory_order_relaxed);
     ::PlaySoundW(nullptr, nullptr, 0);
 }
 
 struct PvCtx {
     std::wstring path;
+    std::shared_ptr<std::vector<unsigned char>> buf;   // 非空 = 从内存播（不读文件）
+    std::string name;
     float gain = 1.0f;
     unsigned delayMs = 0;
+    unsigned startMs = 0;                   // 从第几毫秒开始播（拖进度条后重开声部用）
 };
 
 DWORD WINAPI PvWorker(LPVOID param) {
@@ -860,21 +877,28 @@ DWORD WINAPI PvWorker(LPVOID param) {
     //   如果这里把解码耗时也算进延时之外，就会"游戏比预览快一点"（实测反馈）。
     //   所以：先记开始时间 → 解码 → 只补足剩余的延时。
     const unsigned long long t0 = ::GetTickCount64();
-    HANDLE h = ::CreateFileW(ctx->path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return 0;
-    LARGE_INTEGER sz{};
-    if (!::GetFileSizeEx(h, &sz) || sz.QuadPart <= 0 || sz.QuadPart > (64LL << 20)) {
+
+    std::vector<std::uint8_t> raw;
+    if (ctx->buf && !ctx->buf->empty()) {
+        if (ctx->buf->size() > (64LL << 20)) return 0;
+        raw = *ctx->buf;                    // 内存源：拷贝一份，后面解码/裁剪都不碰外部
+    } else {
+        HANDLE h = ::CreateFileW(ctx->path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE) return 0;
+        LARGE_INTEGER sz{};
+        if (!::GetFileSizeEx(h, &sz) || sz.QuadPart <= 0 || sz.QuadPart > (64LL << 20)) {
+            ::CloseHandle(h);
+            return 0;
+        }
+        raw.resize((std::size_t)sz.QuadPart);
+        DWORD rd = 0;
+        if (!::ReadFile(h, raw.data(), (DWORD)raw.size(), &rd, nullptr) || rd != (DWORD)raw.size()) {
+            ::CloseHandle(h);
+            return 0;
+        }
         ::CloseHandle(h);
-        return 0;
     }
-    std::vector<std::uint8_t> raw((std::size_t)sz.QuadPart);
-    DWORD rd = 0;
-    if (!::ReadFile(h, raw.data(), (DWORD)raw.size(), &rd, nullptr) || rd != (DWORD)raw.size()) {
-        ::CloseHandle(h);
-        return 0;
-    }
-    ::CloseHandle(h);
 
     // 统一解码：wav(含 24/32bit、float) / mp3 / ogg / flac 都能播
     wseaudio::Pcm pcm;
@@ -887,6 +911,31 @@ DWORD WINAPI PvWorker(LPVOID param) {
             const float v = pcm.samples[i] * g;
             pcm.samples[i] = (std::int16_t)(v > 32767.0f ? 32767.0f : (v < -32768.0f ? -32768.0f : v));
         }
+
+    // ---- 播放状态：总长 + 本次声部的起点（界面底部播放条画进度用）----
+    const int rate = pcm.rate > 0 ? (int)pcm.rate : 48000;
+    const int ch = pcm.channels > 0 ? (int)pcm.channels : 1;
+    const std::size_t frames = pcm.samples.size() / (std::size_t)ch;
+    const int durMs = (int)((long long)frames * 1000 / rate);
+    std::size_t skipFrames = 0;
+    if (ctx->startMs > 0) {
+        const long long s = (long long)ctx->startMs * rate / 1000;
+        skipFrames = (std::size_t)(s < 0 ? 0 : (s < (long long)frames ? s : (long long)frames));
+    }
+    const int posBaseMs = (int)((long long)skipFrames * 1000 / rate);
+    {
+        std::lock_guard<std::mutex> lk(gPvMx);
+        gPvPath = ctx->path;
+        gPvBuf = ctx->buf;
+        gPvGain = g;
+        if (!ctx->name.empty()) gPvName = ctx->name;
+        else {
+            const std::size_t cut = ctx->path.find_last_of(L"\\/");
+            gPvName = Utf8FromWide(cut == std::wstring::npos ? ctx->path : ctx->path.substr(cut + 1));
+        }
+    }
+    gPvDurMs.store(durMs, std::memory_order_relaxed);
+    gPvPosMs.store(posBaseMs, std::memory_order_relaxed);
 
     // 只补足剩余延时（解码已经花掉的时间要扣掉），到点就直接发声
     {
@@ -908,8 +957,12 @@ DWORD WINAPI PvWorker(LPVOID param) {
     HWAVEOUT hwo = nullptr;
     if (::waveOutOpen(&hwo, WAVE_MAPPER, &wfx, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) return 0;
 
-    std::vector<std::uint8_t> bytes(pcm.samples.size() * 2);
-    std::memcpy(bytes.data(), pcm.samples.data(), bytes.size());
+    // 从起点开始播（拖进度条之后 startMs > 0：解码还是整段解，只是丢掉前面 skip 帧）
+    const std::size_t fromSample = skipFrames * (std::size_t)ch;
+    const std::size_t leftSamples = pcm.samples.size() - fromSample;
+    if (leftSamples == 0) { ::waveOutClose(hwo); return 0; }
+    std::vector<std::uint8_t> bytes(leftSamples * 2);
+    std::memcpy(bytes.data(), pcm.samples.data() + fromSample, bytes.size());
     WAVEHDR hdr{};
     hdr.lpData = (LPSTR)bytes.data();
     hdr.dwBufferLength = (DWORD)bytes.size();
@@ -918,6 +971,7 @@ DWORD WINAPI PvWorker(LPVOID param) {
         return 0;
     }
     ::waveOutWrite(hwo, &hdr, sizeof(hdr));
+    gPvBusy.store(true, std::memory_order_relaxed);
     while ((hdr.dwFlags & WHDR_DONE) == 0) {
         ::Sleep(10);
         if (gPvStopEpoch.load(std::memory_order_relaxed) != myEpoch) {
@@ -925,21 +979,76 @@ DWORD WINAPI PvWorker(LPVOID param) {
             while ((hdr.dwFlags & WHDR_DONE) == 0) ::Sleep(5);
             break;
         }
+        // 进度：用"已播样点数"换算，和耳朵听到的位置一致（墙钟估算会因设备缓冲偏）
+        MMTIME tm{};
+        tm.wType = TIME_SAMPLES;
+        if (::waveOutGetPosition(hwo, &tm, sizeof(tm)) == MMSYSERR_NOERROR && tm.wType == TIME_SAMPLES)
+            gPvPosMs.store(posBaseMs + (int)((long long)tm.u.sample * 1000 / rate), std::memory_order_relaxed);
+    }
+    // 只有"还是我这一个声部"才清 busy（否则会把刚拖进度条重开的新声部误判成停止）
+    if (gPvStopEpoch.load(std::memory_order_relaxed) == myEpoch) {
+        gPvPosMs.store(durMs, std::memory_order_relaxed);
+        gPvBusy.store(false, std::memory_order_relaxed);
     }
     ::waveOutUnprepareHeader(hwo, &hdr, sizeof(hdr));
     ::waveOutClose(hwo);
     return 0;
 }
 
-void PlayPreviewFile(const std::wstring& path, float gain, unsigned delayMs, bool stopFirst = true) {
+void PlayPreviewFile(const std::wstring& path, float gain, unsigned delayMs, bool stopFirst = true,
+                     unsigned startMs = 0) {
     if (stopFirst) StopAllPreview();   // ★ 试听打断上一条；"整体效果预览"要叠加所以传 false
     PvCtx* c = new PvCtx();
     c->path = path;
     c->gain = gain;
     c->delayMs = delayMs;
+    c->startMs = startMs;
     HANDLE th = ::CreateThread(nullptr, 0, &PvWorker, c, 0, nullptr);
     if (th) ::CloseHandle(th);
     else delete c;
+}
+
+// 内存里的音频（wem 解码出来的 wav）也走同一条播放链：
+// 这样 nbnk 页的「播放」/「听替换音」也有底部播放条、也能拖进度。
+void PlayPreviewBytes(std::vector<unsigned char> bytes, const std::string& name, float gain,
+                      unsigned startMs = 0, bool stopFirst = true) {
+    if (stopFirst) StopAllPreview();
+    PvCtx* c = new PvCtx();
+    c->buf = std::make_shared<std::vector<unsigned char>>(std::move(bytes));
+    c->name = name;
+    c->gain = gain;
+    c->startMs = startMs;
+    HANDLE th = ::CreateThread(nullptr, 0, &PvWorker, c, 0, nullptr);
+    if (th) ::CloseHandle(th);
+    else delete c;
+}
+
+// 导入 nbnk 失败时，把"这个文件到底长什么样"一并说出来：
+//   用户报"不能导入"时只说得出"导入失败"，靠大小 + 开头 4 字节才能分清是压缩包、
+//   还是别的格式、还是文件不完整。
+static std::string BankLoadHint(const std::string& path, const std::string& err) {
+    std::string msg = err;
+    HANDLE h = ::CreateFileW(Utf8ToWide(path).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return msg + "（文件打不开：可能被占用或没有权限）";
+    LARGE_INTEGER sz{};
+    ::GetFileSizeEx(h, &sz);
+    unsigned char head[4] = {};
+    DWORD got = 0;
+    ::ReadFile(h, head, 4, &got, nullptr);
+    ::CloseHandle(h);
+    char hex[24] = {};
+    if (got >= 4) ::sprintf_s(hex, "%02X %02X %02X %02X", head[0], head[1], head[2], head[3]);
+    else ::sprintf_s(hex, "（只有 %u 字节）", (unsigned)got);
+    msg += "\n文件：" + path;
+    msg += "\n大小：" + std::to_string((long long)sz.QuadPart) + " 字节，开头：" + hex;
+    if (got >= 2 && head[0] == 0x50 && head[1] == 0x4B)
+        msg += "\n这是压缩包（zip），不是 nbnk：先解压，再导入里面的 .nbnk。";
+    else if (got >= 4 && head[0] == 'B' && head[1] == 'K' && head[2] == 'H' && head[3] == 'D')
+        msg += "\n开头是 BKHD（确实是 nbnk），可能是文件不完整：重新解包或重新下载一个试试。";
+    else if (sz.QuadPart > 0)
+        msg += "\n这不是 Wwise SoundBank（nbnk 的开头必须是 BKHD）。";
+    return msg;
 }
 
 // ---------------------------------------------------------------------------
@@ -2509,12 +2618,8 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
         }
         ::CloseHandle(rd);
         if (wav.size() < 44) { err = "wem 解码失败（vgmstream 没有输出 wav）"; return false; }
-        ::PlaySoundW(nullptr, nullptr, 0);
-        playBuf.swap(wav);
-        if (!::PlaySoundW((LPCWSTR)playBuf.data(), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT)) {
-            err = "PlaySound 失败";
-            return false;
-        }
+        // 走统一试听链（底部播放条显示/拖动进度）
+        PlayPreviewBytes(std::move(wav), "media " + std::to_string(media), 1.0f);
         return true;
     }
 
@@ -4574,6 +4679,53 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             return OkJson(d);
         }
 
+        // ---------------- 底部播放条：状态 / 拖动进度 / 停止 ----------------
+        //  界面每 250ms 问一次 state 画进度；用户拖进度条时调 seek（从新位置重开声部）。
+        if (method == "sound.previewState") {
+            JVal d = JVal::obj();
+            std::wstring path;
+            std::string name;
+            {
+                std::lock_guard<std::mutex> lk(gPvMx);
+                path = gPvPath;
+                name = gPvName;
+            }
+            d.set("playing", JVal(gPvBusy.load(std::memory_order_relaxed)));
+            d.set("pos", JVal((int)gPvPosMs.load(std::memory_order_relaxed)));
+            d.set("dur", JVal((int)gPvDurMs.load(std::memory_order_relaxed)));
+            d.set("name", JVal(name));
+            d.set("path", JVal(ToSlash(Utf8FromWide(path))));
+            return OkJson(d);
+        }
+        if (method == "sound.previewSeek") {
+            const int ms = p.optInt("ms", -1);
+            if (ms < 0) return ErrJson("缺少 ms");
+            std::wstring path;
+            std::string name;
+            float gain = 1.0f;
+            std::shared_ptr<std::vector<unsigned char>> buf;
+            {
+                std::lock_guard<std::mutex> lk(gPvMx);
+                path = gPvPath;
+                name = gPvName;
+                gain = gPvGain;
+                buf = gPvBuf;
+            }
+            if (!buf && path.empty()) return ErrJson("没有正在试听的音效");
+            StopAllPreview();
+            if (buf) PlayPreviewBytes(*buf, name, gain, (unsigned)ms);
+            else PlayPreviewFile(path, gain, 0, true, (unsigned)ms);
+            JVal d = JVal::obj();
+            d.set("pos", JVal(ms));
+            return OkJson(d);
+        }
+        if (method == "sound.previewStop") {
+            StopAllPreview();
+            JVal d = JVal::obj();
+            d.set("playing", JVal(false));
+            return OkJson(d);
+        }
+
         // ---------------- 预览"这个条目被触发后的整体效果" ----------------
         //  按游戏里的规则挑音效（固定音效全播 + 非固定随机抽一条），各自带自己的延时/音量，
         //  一次性叠加播出来 —— 不用进游戏就能听这条配好的整体效果。
@@ -5145,13 +5297,13 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             ::CloseHandle(rd);
             if (wav.size() < 44) return ErrJson("wem 解码失败（vgmstream 没有输出 wav）");
 
-            ::PlaySoundW(nullptr, nullptr, 0);      // 停掉上一次
-            im->playBuf.swap(wav);                  // 缓冲区要在播放期间保活
-            const BOOL played = ::PlaySoundW((LPCWSTR)im->playBuf.data(), nullptr,
-                                             SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+            // 走统一试听链：底部播放条能显示进度、也能拖进度（不再是 PlaySound 一次播完）
+            const int nbytes = (int)wav.size();
+            const std::string label = bf.name + " · media " + std::to_string(media);
+            PlayPreviewBytes(std::move(wav), label, 1.0f);
             JVal d = JVal::obj();
-            d.set("played", JVal(played != FALSE));
-            d.set("bytes", JVal((int)im->playBuf.size()));
+            d.set("played", JVal(true));
+            d.set("bytes", JVal(nbytes));
             d.set("media", JVal(media));
             return OkJson(d);
         }
@@ -5245,7 +5397,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
         }
 
         if (method == "bank.stopPlay") {
-            ::PlaySoundW(nullptr, nullptr, 0);
+            StopAllPreview();          // 统一试听链：停 waveOut 声部 + PlaySound
             im->playBuf.clear();
             JVal d = JVal::obj();
             d.set("stopped", JVal(true));
@@ -5864,20 +6016,21 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             }
             ::CloseHandle(rd);
             if (wav.size() < 44) return ErrJson("解码失败（格式不支持或文件损坏）");
-            ::PlaySoundW(nullptr, nullptr, 0);
-            im->playBuf.swap(wav);
-            const BOOL played = ::PlaySoundW((LPCWSTR)im->playBuf.data(), nullptr,
-                                             SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+            // 走统一试听链（底部播放条可显示/拖动进度）
+            const int nbytes = (int)wav.size();
+            const std::size_t cut = path.find_last_of("\\/");
+            const std::string label = (cut == std::string::npos ? path : path.substr(cut + 1));
+            PlayPreviewBytes(std::move(wav), label, 1.0f);
             JVal d = JVal::obj();
-            d.set("played", JVal(played != FALSE));
-            d.set("bytes", JVal((int)im->playBuf.size()));
+            d.set("played", JVal(true));
+            d.set("bytes", JVal(nbytes));
             return OkJson(d);
         }
 
         if (method == "bank.pick") {
             std::vector<std::string> multi;
             const std::string p1 = OpenFileDialog(OwnerOf(owner),
-                L"Wwise SoundBank (*.nbnk)\0*.nbnk\0所有文件 (*.*)\0*.*\0", nullptr, L"nbnk",
+                L"Wwise SoundBank (*.nbnk;*.bnk)\0*.nbnk;*.bnk\0所有文件 (*.*)\0*.*\0", nullptr, L"nbnk",
                 false, multi);
             JVal d = JVal::obj();
             d.set("cancelled", JVal(p1.empty()));
@@ -5904,7 +6057,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             if (path.empty()) return ErrJson("缺少 path");
             bankmod::BankFile bf;
             std::string err;
-            if (!bankmod::LoadBank(Utf8ToWide(path), bf, err)) return ErrJson(err);
+            if (!bankmod::LoadBank(Utf8ToWide(path), bf, err)) return ErrJson(BankLoadHint(path, err));
             JVal arr = JVal::arr();
             for (std::size_t i = 0; i < bf.media.size(); ++i) {
                 const bankmod::MediaEntry& m = bf.media[i];

@@ -6,8 +6,8 @@
 <title>Sonar 配置工具</title>
   <!-- 浮窗页面（#overlay）：必须在首屏渲染前同步打上标记，否则会先闪一下完整界面 -->
   <script>if (location.hash === '#overlay') document.documentElement.className = 'overlay-mode';</script>
-<link rel="stylesheet" href="css/base.css?v=2.39.3-dev1">
-<link rel="stylesheet" href="css/themes.css?v=2.39.3-dev1">
+<link rel="stylesheet" href="css/base.css?v=2.39.4-dev1">
+<link rel="stylesheet" href="css/themes.css?v=2.39.4-dev1">
 </head>
 <body>
 <!-- 主题装饰层（可爱风显示爪印，其它主题为空） -->
@@ -145,59 +145,77 @@
     <div class="banktop">
       <button class="backbtn" data-act="bank.return" title="返回条目列表（也可以按 Esc）">← 返回条目列表</button>
       <span class="banktitle">nbnk 制作</span>
-      <span class="dim">导入 nbnk → 选音频替换 → 导出 → 放进 nativePC\sound\wwise\Windows\</span>
+      <span class="dim">换掉游戏里某条音效：导入 → 选音频 → 导出</span>
     </div>
 
     <aside class="rail box">
       <div class="phead">nbnk 操作</div>
       <div class="rail-scroll">
+        <div class="steps">
+          <button class="step" data-act="bank.pick"><b>1</b><span>导入 nbnk 文件</span></button>
+          <button class="step" data-act="bank.export" id="bankExportBtn2" disabled><b>2</b><span>转换并导出</span></button>
+          <div class="stephint" id="bankStepHint">先导入一个 nbnk 文件</div>
+        </div>
+        <div class="railsec">更多</div>
         <div class="navlist">
-          <button class="nav on" data-act="bank.pick">导入 nbnk…</button>
-          <button class="nav" data-act="bank.export" id="bankExportBtn2">转换并导出</button>
-        <button class="nav" data-act="bank.exportModZip" title="把导出的 nbnk 打包成可直接分享的 Mod 压缩包（从 nativePC 开始，别人解压到游戏根目录即生效）">导出 Mod 压缩包</button>
-          <button class="nav" data-act="bank.clear">清空替换列表</button>
+          <button class="nav" data-act="bank.openOut">打开输出目录</button>
+          <button class="nav" data-act="bank.exportModZip" title="把导出的 nbnk 打包成可直接分享的 Mod 压缩包（从 nativePC 开始，别人解压到游戏根目录即生效）">导出 Mod 压缩包</button>
           <button class="nav" data-act="win.nameLib">名字库…</button>
+          <button class="nav" data-act="bank.clear">清空替换列表</button>
         </div>
       </div>
     </aside>
 
     <section class="center box">
-      <div class="phead">nbnk 制作</div>
+      <div class="phead">nbnk 制作<span class="phead-right"><span id="bankHistRow"></span><label class="inline" title="勾上后，捕获列表只显示当前导入的这个 bank 的记录"><input type="checkbox" id="bankOnlyThis" checked> 捕获只显示本 bank</label></span></div>
       <div class="bankpage">
-        <details class="bankhelp">
-          <summary>
-            <span>说明 / 转换环境 <span id="bankEnvBrief" class="dim"></span></span>
-            <span class="bankhdr-right">
-              <span id="bankHistRow"></span>
-              <label class="inline" title="勾上后，捕获列表只显示当前导入的这个 bank 的记录"><input type="checkbox" id="bankOnlyThis" checked>
-                捕获只显示本 bank</label>
-            </span>
-          </summary>
-          <p class="note">把游戏里的某个音效换成你自己的声音：<b>导入 nbnk</b> → 找到要换的那条 → <b>选音频</b>
-            （wav / mp3 / ogg / flac）→ <b>转换并导出</b> → 把生成的 nbnk 放进
-            <code>nativePC\sound\wwise\Windows\</code> 后生效（可直接用「导出到游戏目录」）。
-            只写新文件到输出目录，<b>不会改动游戏原文件</b>。</p>
-          <p class="note ok"><b>生效提示（重要）</b>：武器音效的 nbnk 改完后，<b>一般只要在游戏里切换一次武器种类、再切回来</b>
-            就会重新加载，<b>不需要重启游戏</b>；如果这样没生效，再考虑重启游戏。</p>
-          <div class="note" id="bankEnv">转换环境：检查中…</div>
-        </details>
-
-        <div class="bankline">
-          <span class="lbl">输出目录</span>
-          <input id="bankOutDir" class="mini-in grow" readonly>
-          <button data-act="bank.pickOutDir">更改…</button>
-          <button data-act="bank.outDirToGame" id="bankGameDirBtn" title="只是把上面的「输出目录」改成游戏读取 nbnk 的位置（不会立刻导出，导出要点「转换并导出」）">设为游戏目录</button>
-          <button data-act="bank.openOut">打开目录</button>
+        <div class="banksum">
+          <span id="bankSummary">还没有导入 nbnk</span>
+          <span id="bankEnv" class="banksum-env">转换环境：检查中…</span>
         </div>
-        <div class="paths" id="bankInfo">还没有导入 nbnk。</div>
 
-        <div class="tablewrap banktable">
-          <table>
-            <thead><tr><th>序号</th><th>名称</th><th>media id</th><th>大小</th><th>替换为</th><th class="right">操作</th></tr></thead>
-            <tbody id="bankBody2"></tbody>
-          </table>
+        <div class="bankempty" id="bankEmpty">
+          <div class="beicon">♪</div>
+          <p class="betitle">导入一个 nbnk，开始换音效</p>
+          <p class="betip">nbnk 在游戏的 <code>nativePC\sound\wwise\Windows\</code> 里，也可以从别人的 Mod 压缩包（zip / rar）里拿。</p>
+          <p class="betip">只把新文件写进输出目录，<b>不会改动游戏原文件</b>。</p>
+          <button class="primary" data-act="bank.pick">选择 nbnk 文件…</button>
         </div>
-        <div class="cfoot" id="bankFoot2"></div>
+
+        <div class="bankwork" id="bankWork" hidden>
+          <div class="banktoolbar">
+            <input id="bankSearch" class="mini-in" placeholder="搜名称 / media id / 序号…">
+            <label class="inline"><input type="checkbox" id="bankOnlyReplaced"> 只看已替换</label>
+            <span class="dim" id="bankFilterCount"></span>
+            <span class="grow"></span>
+            <span class="dim" id="bankMediaHint"></span>
+          </div>
+
+          <div class="bankline">
+            <span class="lbl">输出目录</span>
+            <input id="bankOutDir" class="mini-in grow" readonly>
+            <button data-act="bank.pickOutDir">更改…</button>
+            <button data-act="bank.outDirToGame" id="bankGameDirBtn" title="只是把上面的「输出目录」改成游戏读取 nbnk 的位置（不会立刻导出，导出要点「转换并导出」）">设为游戏目录</button>
+          </div>
+
+          <details class="bankhelp">
+            <summary><span>说明 / 生效提示 <span id="bankEnvBrief" class="dim"></span></span></summary>
+            <p class="note">把游戏里的某个音效换成你自己的声音：<b>导入 nbnk</b> → 找到要换的那条 → <b>选音频</b>
+              （wav / mp3 / ogg / flac）→ <b>转换并导出</b> → 把生成的 nbnk 放进
+              <code>nativePC\sound\wwise\Windows\</code> 后生效（可直接用「设为游戏目录」）。
+              只写新文件到输出目录，<b>不会改动游戏原文件</b>。</p>
+            <p class="note ok"><b>生效提示（重要）</b>：武器音效的 nbnk 改完后，<b>一般只要在游戏里切换一次武器种类、再切回来</b>
+              就会重新加载，<b>不需要重启游戏</b>；如果这样没生效，再考虑重启游戏。</p>
+          </details>
+
+          <div class="tablewrap banktable">
+            <table>
+              <thead><tr><th>序号</th><th>名称</th><th>media id</th><th>大小</th><th>替换为</th><th class="right">操作</th></tr></thead>
+              <tbody id="bankBody2"></tbody>
+            </table>
+          </div>
+          <div class="cfoot" id="bankFoot2"></div>
+        </div>
       </div>
     </section>
 
@@ -531,10 +549,19 @@
   </div>
 </div>
 
+<!-- 试听播放条：点任何「试听」都会出现在底部，可以拖着跳转 -->
+<div class="pvbar" id="pvBar" hidden>
+  <span class="pvicon">♪</span>
+  <span class="pvname" id="pvName">—</span>
+  <input type="range" class="pvseek" id="pvSeek" min="0" max="1000" value="0">
+  <span class="pvtime" id="pvTime">0:00 / 0:00</span>
+  <button class="pvsbtn" id="pvStop" title="停止试听">■</button>
+</div>
+
 <div class="toasts" id="toasts"></div>
 
-<script src="js/mock.js?v=2.39.3-dev1"></script>
-<script src="js/app.js?v=2.39.3-dev1"></script>
-<script src="js/capture.js?v=2.39.3-dev1"></script>
+<script src="js/mock.js?v=2.39.4-dev1"></script>
+<script src="js/app.js?v=2.39.4-dev1"></script>
+<script src="js/capture.js?v=2.39.4-dev1"></script>
 </body>
 </html>

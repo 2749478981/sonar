@@ -573,6 +573,24 @@ void ProbePage() {
         L"var bw=Math.round(d.querySelector('.capacts').getBoundingClientRect().width);"
         L"hist.removeChild(d);"
         L"return rh+'px ovf'+ow+' btns'+bw;})();"
+        // nbnk 页自检：进去（同一个脚本里切回来，不会闪），看空态 / 工作区 / 步骤2 / 播放条是否就位
+        L"var bank=(function(){"
+        L"var open=document.querySelector('[data-act=\"win.bank\"]');"
+        L"if(!open)return 'nobtn';"
+        L"try{open.click();}catch(e){return 'err:'+(e&&e.message);}"
+        L"var emp=document.getElementById('bankEmpty');var wrk=document.getElementById('bankWork');"
+        L"var s2=document.getElementById('bankExportBtn2');var pv=document.getElementById('pvBar');"
+        L"var tb=document.getElementById('bankBody2');var sm=document.getElementById('bankSummary');"
+        L"var sk=document.getElementById('bankSearch');var st2=document.getElementById('bankStepHint');"
+        L"out='empty:'+(emp?(emp.hidden?'hidden':'shown'):'missing')"
+        L"+' work:'+(wrk?(wrk.hidden?'hidden':'shown'):'missing')"
+        L"+' step2:'+(s2?(s2.disabled?'off':'on'):'missing')"
+        L"+' pv:'+(pv?'yes':'missing')+' seek:'+(document.getElementById('pvSeek')?'yes':'missing')"
+        L"+' search:'+(sk?'yes':'missing')+' tb:'+(tb?tb.children.length:-1)"
+        L"+' sum:'+((sm&&sm.textContent)||'').slice(0,18)"
+        L"+' hint:'+((st2&&st2.textContent)||'').slice(0,14);"
+        L"try{var back=document.querySelector('[data-act=\"bank.return\"]');if(back)back.click();}catch(e3){}"
+        L"return out;})();"
         L"return JSON.stringify({"
         L"w:innerWidth,h:innerHeight,theme:document.documentElement.getAttribute('data-theme'),"
         L"mainCols:getComputedStyle(document.querySelector('main')).gridTemplateColumns,"
@@ -580,7 +598,7 @@ void ProbePage() {
         L"logoOk:(logo?logo.naturalWidth>0:null),"
         L"capType:(typeof Capture),api:apiInfo,hosts:hosts.length,capRows:cm+'/'+cb,view:view,"
         L"layout:layout,wemView:wemView,capStat:(stat?stat.textContent:''),capFilter:(filt?filt.textContent:''),"
-        L"capText:ct,dllWarn:dwS,thCols:etc,rowCols:erc,weaponColHidden:ehw,weaponOn:wOn+'/'+wsw.length,weaponOffRows:wOff+'/'+wOffX,jsErr:jse,status:(st?st.textContent:'')"
+        L"capText:ct,dllWarn:dwS,thCols:etc,rowCols:erc,weaponColHidden:ehw,weaponOn:wOn+'/'+wsw.length,weaponOffRows:wOff+'/'+wOffX,bank:bank,jsErr:jse,status:(st?st.textContent:'')"
         L"});})()",
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
             [](HRESULT, LPCWSTR json) -> HRESULT {
