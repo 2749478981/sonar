@@ -40,11 +40,32 @@ function h(tag, props, ...kids) {
   return el;
 }
 
-function toast(msg, kind) {
-  const t = h('div', { class: 'toast' + (kind ? ' ' + kind : ''), text: msg });
-  $('#toasts').appendChild(t);
-  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; }, 2400);
-  setTimeout(() => t.remove(), 2800);
+// 提示条：默认叠在底部，2.4 秒淡出。
+//   key 非空 = "同一个 key 只留一条"：新消息**覆盖**旧的那条而不是往上堆
+//   （连续试听好几条时，堆一屏的提示条会挡住下面的列表，看不清也点不到）。
+//   keyed 提示强制单行（超出用省略号），完整文字放在 title 里，鼠标悬停可看。
+function toast(msg, kind, key, titleText) {
+  const box = $('#toasts');
+  if (!box) return;
+  const text = String(msg == null ? '' : msg);
+  let t = key ? box.querySelector('[data-k="' + key + '"]') : null;
+  const cls = 'toast' + (kind ? ' ' + kind : '') + (key ? ' one' : '');
+  if (!t) {
+    t = h('div', { class: cls });
+    if (key) t.setAttribute('data-k', key);
+    box.appendChild(t);
+  }
+  t.className = cls;
+  t.textContent = text;
+  t.title = titleText ? String(titleText) : text;
+  clearTimeout(t.__t1);
+  clearTimeout(t.__t2);
+  t.style.transition = '';
+  t.style.opacity = '1';
+  t.__t1 = setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; }, 2400);
+  t.__t2 = setTimeout(() => t.remove(), 2800);
+  // 兜底：最多同时留 3 条，多出来的从最旧的开始丢
+  while (box.children.length > 3) box.removeChild(box.children[0]);
 }
 
 /* 极简 Markdown → HTML，只覆盖发布说明里实际用到的那几种语法。
@@ -889,7 +910,7 @@ function wemRowClick(r) {
   if (ST.bankPage) {
     if (!BANK.path) { toast('先在左边导入一个 nbnk', 'err'); return; }
     Backend.call('bank.play', { path: BANK.path, media: r.wemMedia })
-      .then(() => toast('播放 media ' + r.wemMedia + (r.bank ? '（' + r.bank + '）' : ''), 'ok'))
+      .then(() => toast('播放 media ' + r.wemMedia + (r.bank ? '（' + r.bank + '）' : ''), 'ok', 'play'))
       .catch(e => toast(e.message || '播放失败', 'err'));
     return;
   }
@@ -999,7 +1020,7 @@ function renderBank() {
           try {
             const r = await Backend.call('bank.play', { path: BANK.path, media: m.id });
             if (!r.played) toast('播放失败（解码器可能没就位）', 'err');
-            else { playingMedia = m.id; toast(`播放中：media ${m.id}`, 'ok'); }
+            else { playingMedia = m.id; toast(`播放中：media ${m.id}`, 'ok', 'play'); }
           } catch (e) { toast('播放失败：' + e.message, 'err'); }
         } }, '播放'),
         h('button', { title: '停止播放', onclick: async () => {
@@ -1909,7 +1930,8 @@ async function previewEntry(index, useDraft) {
     // useDraft=true 时直接预览编辑器里的草稿 → 改了没保存也能立刻听到
     const payload = (useDraft && ED.draft) ? { entry: ED.draft } : { index };
     const r = await Backend.call('entry.preview', payload);
-    toast('预览「' + (r.pool || '音效') + '」：' + r.count + ' 条\n' + (r.files || []).join('\n'), 'ok');
+    toast('预览「' + (r.pool || '音效') + '」：' + r.count + ' 条', 'ok', 'preview',
+      (r.files || []).join('\n'));
   } catch (e) { toast('预览失败：' + (e.message || e), 'err'); }
 }
 

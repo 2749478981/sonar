@@ -456,6 +456,8 @@ body.modal-open .deco{display:none}
 }
 .toast.err{border-color:var(--c-red); color:var(--c-red)}
 .toast.ok{border-color:var(--c-green)}
+/* 单行提示条（试听 / 播放这类会连续弹出的）：只占一行，超出用省略号，完整内容看 title */
+.toast.one{max-width:min(680px,64vw); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 /* 成就 toast：两行（第一行成就名，第二行描述；描述可带可点击链接） */
 .toast.egg{border-radius:14px; display:flex; flex-direction:column; gap:3px;
            padding:11px 18px; min-width:240px; text-align:center;

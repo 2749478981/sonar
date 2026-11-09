@@ -852,11 +852,12 @@ std::shared_ptr<std::vector<unsigned char>> gPvBuf;   // 内存源（bank wem / 
 float gPvGain = 1.0f;                       // 它的增益（拖动后要用同一个增益重开）
 std::atomic<int> gPvDurMs{ 0 };             // 总时长（0 = 还没有在播）
 std::atomic<int> gPvPosMs{ 0 };             // 当前位置
-std::atomic<bool> gPvBusy{ false };         // 有声音正在播（播放条显示/隐藏靠它）
+std::atomic<int> gPvActive{ 0 };            // 正在播的声部数（"整体效果预览"会同时播好几条）
+std::atomic<int> gPvNextId{ 1 };            // 声部编号
+std::atomic<int> gPvOwnerId{ 0 };           // 正在驱动播放条的那个声部（最长的一条）
 
 void StopAllPreview() {
     gPvStopEpoch.fetch_add(1, std::memory_order_relaxed);
-    gPvBusy.store(false, std::memory_order_relaxed);
     ::PlaySoundW(nullptr, nullptr, 0);
 }
 
@@ -923,7 +924,11 @@ DWORD WINAPI PvWorker(LPVOID param) {
         skipFrames = (std::size_t)(s < 0 ? 0 : (s < (long long)frames ? s : (long long)frames));
     }
     const int posBaseMs = (int)((long long)skipFrames * 1000 / rate);
-    {
+    // 叠加预览（条目「整体效果」会同时播固定音效 + 随机一条）时只让**最长的那条**驱动播放条：
+    // 否则短的那条先播完就把进度写成"满/0"，看起来就是"进度条卡住不动"。
+    const int myId = gPvNextId.fetch_add(1, std::memory_order_relaxed);
+    const bool owner = (durMs >= gPvDurMs.load(std::memory_order_relaxed));
+    if (owner) {
         std::lock_guard<std::mutex> lk(gPvMx);
         gPvPath = ctx->path;
         gPvBuf = ctx->buf;
@@ -933,9 +938,15 @@ DWORD WINAPI PvWorker(LPVOID param) {
             const std::size_t cut = ctx->path.find_last_of(L"\\/");
             gPvName = Utf8FromWide(cut == std::wstring::npos ? ctx->path : ctx->path.substr(cut + 1));
         }
+        gPvOwnerId.store(myId, std::memory_order_relaxed);
+        gPvDurMs.store(durMs, std::memory_order_relaxed);
+        gPvPosMs.store(posBaseMs, std::memory_order_relaxed);
     }
-    gPvDurMs.store(durMs, std::memory_order_relaxed);
-    gPvPosMs.store(posBaseMs, std::memory_order_relaxed);
+    // 声部计数用 RAII：下面任何一条 return 都要把它减回去，否则播放条会一直显示"在播"
+    struct PvAlive {
+        PvAlive() { gPvActive.fetch_add(1, std::memory_order_relaxed); }
+        ~PvAlive() { gPvActive.fetch_sub(1, std::memory_order_relaxed); }
+    } alive;
 
     // 只补足剩余延时（解码已经花掉的时间要扣掉），到点就直接发声
     {
@@ -971,7 +982,6 @@ DWORD WINAPI PvWorker(LPVOID param) {
         return 0;
     }
     ::waveOutWrite(hwo, &hdr, sizeof(hdr));
-    gPvBusy.store(true, std::memory_order_relaxed);
     while ((hdr.dwFlags & WHDR_DONE) == 0) {
         ::Sleep(10);
         if (gPvStopEpoch.load(std::memory_order_relaxed) != myEpoch) {
@@ -980,15 +990,18 @@ DWORD WINAPI PvWorker(LPVOID param) {
             break;
         }
         // 进度：用"已播样点数"换算，和耳朵听到的位置一致（墙钟估算会因设备缓冲偏）
-        MMTIME tm{};
-        tm.wType = TIME_SAMPLES;
-        if (::waveOutGetPosition(hwo, &tm, sizeof(tm)) == MMSYSERR_NOERROR && tm.wType == TIME_SAMPLES)
-            gPvPosMs.store(posBaseMs + (int)((long long)tm.u.sample * 1000 / rate), std::memory_order_relaxed);
+        if (owner) {
+            MMTIME tm{};
+            tm.wType = TIME_SAMPLES;
+            if (::waveOutGetPosition(hwo, &tm, sizeof(tm)) == MMSYSERR_NOERROR && tm.wType == TIME_SAMPLES)
+                gPvPosMs.store(posBaseMs + (int)((long long)tm.u.sample * 1000 / rate), std::memory_order_relaxed);
+        }
     }
-    // 只有"还是我这一个声部"才清 busy（否则会把刚拖进度条重开的新声部误判成停止）
-    if (gPvStopEpoch.load(std::memory_order_relaxed) == myEpoch) {
+    // 只有"驱动播放条的那个声部"正常播完，才把进度收到末尾
+    //（被停止/被新试听打断时 epoch 已经变了，不能改状态）
+    if (owner && gPvStopEpoch.load(std::memory_order_relaxed) == myEpoch) {
         gPvPosMs.store(durMs, std::memory_order_relaxed);
-        gPvBusy.store(false, std::memory_order_relaxed);
+        gPvOwnerId.store(0, std::memory_order_relaxed);
     }
     ::waveOutUnprepareHeader(hwo, &hdr, sizeof(hdr));
     ::waveOutClose(hwo);
@@ -4690,7 +4703,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 path = gPvPath;
                 name = gPvName;
             }
-            d.set("playing", JVal(gPvBusy.load(std::memory_order_relaxed)));
+            d.set("playing", JVal(gPvActive.load(std::memory_order_relaxed) > 0));
             d.set("pos", JVal((int)gPvPosMs.load(std::memory_order_relaxed)));
             d.set("dur", JVal((int)gPvDurMs.load(std::memory_order_relaxed)));
             d.set("name", JVal(name));
