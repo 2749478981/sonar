@@ -960,6 +960,19 @@ let bankOnlyReplaced = false;                               // 只看已选替�
 function bankRepCount() { return Object.keys(BANK.reps).length; }
 function bankMediaName(m) { return m.custom ? m.name : (m.note || '—'); }
 
+// 列表里的「0:59(2.11MB)」：时长来自 bank.durations（异步填），大小由 media 记录直接算。
+// 时长还没算出来就显示 "--"，算不出来（解码器不认）也显示 "--"。
+function bankSizeText(m) {
+  const mb = (m.size || 0) / (1024 * 1024);
+  const sz = mb >= 0.01 ? mb.toFixed(2) : (mb > 0 ? '0.01' : '0.00');
+  let t = '--';
+  if (m.ms > 0) {
+    const sec = Math.round(m.ms / 1000);
+    t = Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+  }
+  return t + '(' + sz + 'MB)';
+}
+
 // 摘要条 / 空态 / 左侧步骤按钮：导入状态一变就刷新
 function renderBankShell() {
   const nRep = bankRepCount();
@@ -1012,12 +1025,14 @@ function renderBank() {
       h('td', { class: 'lmt' }, String(m.seqInBank || m.seq)),
       h('td', {}, h('span', { class: 'nm', title: m.custom ? m.name : '', text: bankMediaName(m) })),
       h('td', { class: 'fsm', style: 'color:var(--c-blue)' }, String(m.id)),
-      h('td', { class: 'lmt' }, String(m.size)),
+      h('td', { class: 'lmt', title: `${m.size} 字节` }, bankSizeText(m)),
       h('td', { title: rep, style: 'max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
         rep ? rep.split(/[\\/]/).pop() : '—'),
       h('td', {}, h('div', { class: 'acts' },
         h('button', { title: '在 GUI 内直接播放这条 wem（底部播放条可拖进度）', onclick: async (ev) => {
           try {
+            // 长音频（几分钟的 BGM）解码要十几秒：先给个提示，否则会以为没反应
+            if ((m.ms || 0) > 30000) toast(`正在解码 ${bankSizeText(m)}…`, 'ok', 'play');
             const r = await Backend.call('bank.play', { path: BANK.path, media: m.id });
             if (!r.played) toast('播放失败（解码器可能没就位）', 'err');
             else { playingMedia = m.id; toast(`播放中：media ${m.id}`, 'ok', 'play'); }
@@ -2480,6 +2495,7 @@ ACTIONS['bank.pick'] = async () => {
     if (!info.hasWwise)
       toast('没检测到 Wwise —— 生成 wem 需要它（可只替换已经是 wem 的文件）', 'err');
     else toast(`已导入 ${info.bank}.${BANK.ext}（${BANK.media.length} 条 media）`, 'ok');
+    loadBankDurations(r.path);   // 时长单独算（大包要几秒），算好再把「0:59(2.11MB)」填上
   } catch (e) {
     renderBank();
     // 导入失败的原因可能有好几行（文件大小 / 开头字节 / 建议），用弹窗而不是小提示条
@@ -2488,6 +2504,24 @@ ACTIONS['bank.pick'] = async () => {
 };
 
 ACTIONS['bank.clear'] = () => { BANK.reps = {}; renderBank(); toast('已清空替换列表'); };
+
+// 导入后异步补时长：表格先出（大小立即可见），时长算完再刷一次列表。
+async function loadBankDurations(path) {
+  const mh = $('#bankMediaHint');
+  if (mh) mh.textContent = '正在读取时长…';
+  try {
+    const r = await Backend.call('bank.durations', { path });
+    const map = {};
+    (r.items || []).forEach(it => { map[it.id] = it.ms || 0; });
+    let got = 0;
+    BANK.media.forEach(m => { if (map[m.id] !== undefined) { m.ms = map[m.id]; if (m.ms > 0) ++got; } });
+    renderBank();
+    if (!got) toast('读取不到时长（解码器可能没就位）', 'err');
+  } catch (e) {
+    if (mh) mh.textContent = '读取时长失败';
+    toast('读取时长失败：' + e.message, 'err');
+  }
+}
 
 ACTIONS['bank.outDirToGame'] = async () => {
   try {
@@ -2807,7 +2841,7 @@ Backend.onEvent(ev => {
    —— 后端 sound.preview / bank.play / audio.playFile 都走同一条 waveOut 播放链，
       所以上面任何一个入口点「试听」都会让这条播放条出现。
    =========================================================================== */
-const PV = { dur: 0, pos: 0, dragging: false, timer: null };
+const PV = { dur: 0, pos: 0, dragging: false, timer: null, paused: false };
 
 function pvFmt(ms) {
   const s = Math.max(0, Math.round((ms || 0) / 1000));
@@ -2824,6 +2858,15 @@ function pvApply(st) {
   // 没在播就不显示：否则被打断的那条会留下"0:00 / 0:37"这种停在开头的残影
   if (!playing) { bar.hidden = true; return; }
   bar.hidden = false;
+  const paused = !!(st && st.paused);
+  PV.paused = paused;
+  const pb = $('#pvPause');
+  if (pb) {
+    pb.textContent = paused ? '▶' : '‖';
+    pb.title = paused ? '继续试听' : '暂停试听';
+    pb.classList.toggle('on', paused);
+  }
+  bar.classList.toggle('paused', paused);
   const nm = $('#pvName');
   if (nm) { nm.textContent = (st && st.name) || '试听中…'; nm.title = (st && st.path) || ''; }
   const pct = dur > 0 ? Math.max(0, Math.min(100, pos / dur * 100)) : 0;
@@ -2870,6 +2913,19 @@ async function pvPoll() {
     bar.hidden = true;
     clearTimeout(PV.timer);
     setTimeout(pvPoll, 1200);
+  };
+  const pb = $('#pvPause');
+  if (pb) pb.onclick = async () => {
+    const next = !PV.paused;
+    try {
+      await Backend.call(next ? 'sound.previewPause' : 'sound.previewResume', {});
+      PV.paused = next;
+      pb.textContent = next ? '▶' : '‖';
+      pb.title = next ? '继续试听' : '暂停试听';
+      pb.classList.toggle('on', next);
+      bar.classList.toggle('paused', next);
+    } catch (e) { toast('暂停失败：' + e.message, 'err'); }
+    clearTimeout(PV.timer); pvPoll();
   };
   pvPoll();
 })();

@@ -6,8 +6,8 @@
 <title>Sonar 配置工具</title>
   <!-- 浮窗页面（#overlay）：必须在首屏渲染前同步打上标记，否则会先闪一下完整界面 -->
   <script>if (location.hash === '#overlay') document.documentElement.className = 'overlay-mode';</script>
-<link rel="stylesheet" href="css/base.css?v=2.39.4-dev3">
-<link rel="stylesheet" href="css/themes.css?v=2.39.4-dev3">
+<link rel="stylesheet" href="css/base.css?v=2.39.4-dev4">
+<link rel="stylesheet" href="css/themes.css?v=2.39.4-dev4">
 </head>
 <body>
 <!-- 主题装饰层（可爱风显示爪印，其它主题为空） -->
@@ -210,7 +210,7 @@
 
           <div class="tablewrap banktable">
             <table>
-              <thead><tr><th>序号</th><th>名称</th><th>media id</th><th>大小</th><th>替换为</th><th class="right">操作</th></tr></thead>
+              <thead><tr><th>序号</th><th>名称</th><th>media id</th><th>时长（大小）</th><th>替换为</th><th class="right">操作</th></tr></thead>
               <tbody id="bankBody2"></tbody>
             </table>
           </div>
@@ -555,13 +555,14 @@
   <span class="pvname" id="pvName">—</span>
   <input type="range" class="pvseek" id="pvSeek" min="0" max="1000" value="0">
   <span class="pvtime" id="pvTime">0:00 / 0:00</span>
+  <button class="pvsbtn" id="pvPause" title="暂停试听（再点继续）">‖</button>
   <button class="pvsbtn" id="pvStop" title="停止试听">■</button>
 </div>
 
 <div class="toasts" id="toasts"></div>
 
-<script src="js/mock.js?v=2.39.4-dev3"></script>
-<script src="js/app.js?v=2.39.4-dev3"></script>
-<script src="js/capture.js?v=2.39.4-dev3"></script>
+<script src="js/mock.js?v=2.39.4-dev4"></script>
+<script src="js/app.js?v=2.39.4-dev4"></script>
+<script src="js/capture.js?v=2.39.4-dev4"></script>
 </body>
 </html>

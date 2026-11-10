@@ -855,10 +855,25 @@ std::atomic<int> gPvPosMs{ 0 };             // 当前位置
 std::atomic<int> gPvActive{ 0 };            // 正在播的声部数（"整体效果预览"会同时播好几条）
 std::atomic<int> gPvNextId{ 1 };            // 声部编号
 std::atomic<int> gPvOwnerId{ 0 };           // 正在驱动播放条的那个声部（最长的一条）
+std::atomic<bool> gPvPaused{ false };       // 暂停中（声音和进度都停住）
+std::mutex gPvDevMx;                        // 保护下面这张"正在出声的设备"表
+std::vector<HWAVEOUT> gPvDevs;              // 活着的声部设备（暂停/继续要一起处理）
+
+// 暂停 / 继续所有试听声部。
+//   waveOutPause 之后 waveOutGetPosition 不再前进，进度条自然停住；重启不会丢缓冲区。
+void PauseAllPreview(bool pause) {
+    std::lock_guard<std::mutex> lk(gPvDevMx);
+    for (HWAVEOUT h : gPvDevs) {
+        if (pause) ::waveOutPause(h);
+        else       ::waveOutRestart(h);
+    }
+    gPvPaused.store(pause, std::memory_order_relaxed);
+}
 
 void StopAllPreview() {
     gPvStopEpoch.fetch_add(1, std::memory_order_relaxed);
     ::PlaySoundW(nullptr, nullptr, 0);
+    gPvPaused.store(false, std::memory_order_relaxed);
     // ★ 停掉之后要把播放条的状态清零：否则下次播一条**更短**的音效时，
     //   `durMs >= gPvDurMs` 永远不成立 → 新声部不当 owner → 播放条还挂着上一条
     //   的名字和时长，进度就停在 0:00 不动（用户报过"进度条卡住"）。
@@ -887,14 +902,17 @@ DWORD WINAPI PvWorker(LPVOID param) {
 
     std::vector<std::uint8_t> raw;
     if (ctx->buf && !ctx->buf->empty()) {
-        if (ctx->buf->size() > (64LL << 20)) return 0;
+        // ★ 上限 256MB：长 BGM（4 分半 4 声道 ≈ 200MB wav）以前撞 64MB 上限会被静默丢掉，
+        //   表现就是"这条 wem 点了没声音"（用户报过）。现在 vgmstream 那边已经 -D 2 降混，
+        //   体积减半；这里再放宽，避免解码成功却播不出来。
+        if (ctx->buf->size() > (256LL << 20)) return 0;
         raw = *ctx->buf;                    // 内存源：拷贝一份，后面解码/裁剪都不碰外部
     } else {
         HANDLE h = ::CreateFileW(ctx->path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h == INVALID_HANDLE_VALUE) return 0;
         LARGE_INTEGER sz{};
-        if (!::GetFileSizeEx(h, &sz) || sz.QuadPart <= 0 || sz.QuadPart > (64LL << 20)) {
+        if (!::GetFileSizeEx(h, &sz) || sz.QuadPart <= 0 || sz.QuadPart > (256LL << 20)) {
             ::CloseHandle(h);
             return 0;
         }
@@ -1006,6 +1024,11 @@ HWAVEOUT hwo = nullptr;
         ::waveOutClose(hwo);
         return 0;
     }
+    {   // 登记到"活着的声部"表里，暂停/继续要按这张表逐个处理
+        std::lock_guard<std::mutex> lk(gPvDevMx);
+        gPvDevs.push_back(hwo);
+    }
+    if (gPvPaused.load(std::memory_order_relaxed)) ::waveOutPause(hwo);   // 暂停中开始播的新声部也要停住
 ::waveOutWrite(hwo, &hdr, sizeof(hdr));
     while ((hdr.dwFlags & WHDR_DONE) == 0) {
         ::Sleep(10);
@@ -1029,6 +1052,10 @@ HWAVEOUT hwo = nullptr;
         gPvOwnerId.store(0, std::memory_order_relaxed);
     }
 ::waveOutUnprepareHeader(hwo, &hdr, sizeof(hdr));
+    {
+        std::lock_guard<std::mutex> lk(gPvDevMx);
+        gPvDevs.erase(std::remove(gPvDevs.begin(), gPvDevs.end(), hwo), gPvDevs.end());
+    }
     ::waveOutClose(hwo);
     return 0;
 }
@@ -1061,7 +1088,52 @@ void PlayPreviewBytes(std::vector<unsigned char> bytes, const std::string& name,
     else delete c;
 }
 
-// 导入 nbnk 失败时，把"这个文件到底长什么样"一并说出来：
+// 用随包分发的 vgmstream-cli 把 wem 解码成标准 wav（读进内存）。
+//   -D 2  —— 4/6 声道的 BGM 直接降混成立体声：4 分半的 5.1 音轨解出来是 200MB+，
+//            以前会撞体积上限、静默播不出来（用户报"有的 npck 的听不了"）；降混后体积减半。
+//   超时 120s —— 长 BGM 解码要十几秒（原来只等 15s，等于解到一半就放手）。
+//   先带 -D 2 跑，读不到 wav（老版本 cli 不认这个参数）再退回原样跑一次。
+static bool VgDecodeWem(const std::wstring& cli, const std::wstring& tmpDir, const std::wstring& wemFile,
+                        std::vector<unsigned char>& wav) {
+    wav.clear();
+    const wchar_t* extra[2] = { L" -p -D 2 \"", L" -p \"" };
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+        HANDLE rd = nullptr, wr = nullptr;
+        if (!::CreatePipe(&rd, &wr, &sa, 1 << 20)) return false;
+        ::SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+        si.hStdOutput = wr;
+        si.hStdError = wr;
+        PROCESS_INFORMATION pi{};
+        std::wstring cmd = L"\"" + cli + L"\"" + extra[attempt] + wemFile + L"\"";
+        std::vector<wchar_t> buf(cmd.begin(), cmd.end());
+        buf.push_back(0);
+        const BOOL ok = ::CreateProcessW(nullptr, buf.data(), nullptr, nullptr, TRUE,
+                                         CREATE_NO_WINDOW, nullptr, tmpDir.c_str(), &si, &pi);
+        ::CloseHandle(wr);
+        if (ok) {
+            ::CloseHandle(pi.hThread);
+            unsigned char chunk[65536];
+            DWORD got = 0;
+            while (::ReadFile(rd, chunk, sizeof(chunk), &got, nullptr) && got > 0)
+                wav.insert(wav.end(), chunk, chunk + got);
+            ::WaitForSingleObject(pi.hProcess, 120000);
+            ::CloseHandle(pi.hProcess);
+        }
+        ::CloseHandle(rd);
+        if (wav.size() >= 44) return true;
+        wav.clear();
+    }
+    return false;
+}
+
+// 导入 nbnk / npck 失败时，把"这个文件到底长什么样"一并说出来：
 //   用户报"不能导入"时只说得出"导入失败"，靠大小 + 开头 4 字节才能分清是压缩包、
 //   还是别的格式、还是文件不完整。
 static std::string BankLoadHint(const std::string& path, const std::string& err) {
@@ -1571,6 +1643,9 @@ struct Core::Impl {
     std::unordered_map<int, std::string> wemNames;                 // media id -> 可读名(UTF-8)
     std::unordered_map<int, std::string> wemNotes;                 // media id -> 括号里的注释名（瓶子声/弹刀…）
     std::unordered_map<int, std::pair<std::string, int>> wemSeqs;  // media id -> (bank, 序号=该bank DIDX第几个)
+    std::unordered_map<long long, int> wemDurCache;                // media id -> 时长(ms)，0/缺失 = 还没算过
+    std::shared_ptr<bankmod::BankFile> bankCache;                  // 最近一次解析好的 bank（inspect/play/时长共用）
+    std::string bankCachePath;
     // 循环音检测（行为判定）：4 秒内同一 media 出现 >= 4 次 → 判为循环音并静默 8 秒
     struct LoopStat { unsigned long long winStart = 0; int count = 0; unsigned long long muteUntil = 0; };
     std::unordered_map<int, LoopStat> wemLoops;
@@ -2603,6 +2678,16 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
         }
     }
 
+    // 解析 nbnk/npck 并缓存（inspect / play / 算时长 共用一份，避免每次点击重读上百 MB）
+    std::shared_ptr<bankmod::BankFile> GetBank(const std::string& path, std::string& err) {
+        if (bankCache && bankCachePath == path) return bankCache;
+        std::shared_ptr<bankmod::BankFile> bf = std::make_shared<bankmod::BankFile>();
+        if (!bankmod::LoadBank(Utf8ToWide(path), *bf, err)) return nullptr;
+        bankCache = bf;
+        bankCachePath = path;
+        return bf;
+    }
+
     // wem 字节 → vgmstream 解码到内存 → PlaySound（GUI 内播放，不调外部播放器）
     bool PlayWemBytes(const std::vector<uint8_t>& wem, long long media, std::string& err) {
         std::wstring cli = Utf8ToWide(exeDir) + L"wemkit\\vgmstream\\vgmstream-cli.exe";
@@ -2625,40 +2710,14 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
             ::WriteFile(h, wem.data(), (DWORD)wem.size(), &wr0, nullptr);
             ::CloseHandle(h);
         }
-        SECURITY_ATTRIBUTES sa{};
-        sa.nLength = sizeof(sa);
-        sa.bInheritHandle = TRUE;
-        HANDLE rd = nullptr, wr = nullptr;
-        if (!::CreatePipe(&rd, &wr, &sa, 1 << 20)) { err = "创建管道失败"; return false; }
-        ::SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
-        STARTUPINFOW si{};
-        si.cb = sizeof(si);
-        si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-        si.wShowWindow = SW_HIDE;
-        si.hStdOutput = wr;
-        si.hStdError = wr;
-        PROCESS_INFORMATION pi{};
-        std::wstring cmd = L"\"" + cli + L"\" -p \"" + wemFile + L"\"";
-        std::vector<wchar_t> buf(cmd.begin(), cmd.end());
-        buf.push_back(0);
-        const BOOL ok = ::CreateProcessW(nullptr, buf.data(), nullptr, nullptr, TRUE,
-                                         CREATE_NO_WINDOW, nullptr, tmpDir.c_str(), &si, &pi);
-        ::CloseHandle(wr);
         std::vector<unsigned char> wav;
-        if (ok) {
-            ::CloseHandle(pi.hThread);
-            unsigned char chunk[65536];
-            DWORD got = 0;
-            while (::ReadFile(rd, chunk, sizeof(chunk), &got, nullptr) && got > 0)
-                wav.insert(wav.end(), chunk, chunk + got);
-            ::WaitForSingleObject(pi.hProcess, 15000);
-            ::CloseHandle(pi.hProcess);
+        if (VgDecodeWem(cli, tmpDir, wemFile, wav)) {
+            // 走统一试听链（底部播放条显示/拖动进度）
+            PlayPreviewBytes(std::move(wav), "media " + std::to_string(media), 1.0f);
+            return true;
         }
-        ::CloseHandle(rd);
-        if (wav.size() < 44) { err = "wem 解码失败（vgmstream 没有输出 wav）"; return false; }
-        // 走统一试听链（底部播放条显示/拖动进度）
-        PlayPreviewBytes(std::move(wav), "media " + std::to_string(media), 1.0f);
-        return true;
+        err = "wem 解码失败（vgmstream 没有输出 wav）";
+        return false;
     }
 
     // 统一的 wem 显示名：用户命名 > 官方注释名 > bank·第N个 > 日志里的名字 > media N。
@@ -4729,6 +4788,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 name = gPvName;
             }
             d.set("playing", JVal(gPvActive.load(std::memory_order_relaxed) > 0));
+            d.set("paused", JVal(gPvPaused.load(std::memory_order_relaxed)));
             d.set("pos", JVal((int)gPvPosMs.load(std::memory_order_relaxed)));
             d.set("dur", JVal((int)gPvDurMs.load(std::memory_order_relaxed)));
             d.set("name", JVal(name));
@@ -4761,6 +4821,14 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             StopAllPreview();
             JVal d = JVal::obj();
             d.set("playing", JVal(false));
+            return OkJson(d);
+        }
+        if (method == "sound.previewPause" || method == "sound.previewResume") {
+            const bool pause = (method == "sound.previewPause");
+            if (gPvActive.load(std::memory_order_relaxed) > 0) PauseAllPreview(pause);
+            JVal d = JVal::obj();
+            d.set("paused", JVal(pause));
+            d.set("playing", JVal(gPvActive.load(std::memory_order_relaxed) > 0));
             return OkJson(d);
         }
 
@@ -5265,9 +5333,10 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             const std::string path = Trim(p.optStr("path"));
             const long long media = p.find("media") ? p.find("media")->asInt(0) : 0;
             if (path.empty() || media <= 0) return ErrJson("缺少 path/media");
-            bankmod::BankFile bf;
             std::string err;
-            if (!bankmod::LoadBank(Utf8ToWide(path), bf, err)) return ErrJson(err);
+            std::shared_ptr<bankmod::BankFile> bfs = im->GetBank(path, err);   // 复用 inspect 时的解析结果
+            if (!bfs) return ErrJson(err);
+            bankmod::BankFile& bf = *bfs;
             std::vector<uint8_t> wem;
             if (!bankmod::ExtractWem(bf, (uint32_t)media, wem)) {
                 // 这条 media 不在当前导入的 nbnk 里 —— 用真值表查出它真正属于哪个 bank
@@ -5303,37 +5372,9 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 ::CloseHandle(h);
             }
 
-            SECURITY_ATTRIBUTES sa{};
-            sa.nLength = sizeof(sa);
-            sa.bInheritHandle = TRUE;
-            HANDLE rd = nullptr, wr = nullptr;
-            if (!::CreatePipe(&rd, &wr, &sa, 1 << 20)) return ErrJson("创建管道失败");
-            ::SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
-            STARTUPINFOW si{};
-            si.cb = sizeof(si);
-            si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-            si.wShowWindow = SW_HIDE;
-            si.hStdOutput = wr;
-            si.hStdError = wr;
-            PROCESS_INFORMATION pi{};
-            std::wstring cmd = L"\"" + cli + L"\" -p \"" + wemFile + L"\"";
-            std::vector<wchar_t> buf(cmd.begin(), cmd.end());
-            buf.push_back(0);
-            const BOOL ok = ::CreateProcessW(nullptr, buf.data(), nullptr, nullptr, TRUE,
-                                             CREATE_NO_WINDOW, nullptr, tmpDir.c_str(), &si, &pi);
-            ::CloseHandle(wr);
             std::vector<unsigned char> wav;
-            if (ok) {
-                ::CloseHandle(pi.hThread);
-                unsigned char chunk[65536];
-                DWORD got = 0;
-                while (::ReadFile(rd, chunk, sizeof(chunk), &got, nullptr) && got > 0)
-                    wav.insert(wav.end(), chunk, chunk + got);
-                ::WaitForSingleObject(pi.hProcess, 15000);
-                ::CloseHandle(pi.hProcess);
-            }
-            ::CloseHandle(rd);
-            if (wav.size() < 44) return ErrJson("wem 解码失败（vgmstream 没有输出 wav）");
+            if (!VgDecodeWem(cli, tmpDir, wemFile, wav))
+                return ErrJson("wem 解码失败（vgmstream 没有输出 wav）");
 
             // 走统一试听链：底部播放条能显示进度、也能拖进度（不再是 PlaySound 一次播完）
             const int nbytes = (int)wav.size();
@@ -6023,37 +6064,9 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             std::wstring tmpDir = Utf8ToWide(im->exeDir) + L"wemkit\\tmp";
             ::CreateDirectoryW(tmpDir.c_str(), nullptr);
 
-            SECURITY_ATTRIBUTES sa{};
-            sa.nLength = sizeof(sa);
-            sa.bInheritHandle = TRUE;
-            HANDLE rd = nullptr, wr = nullptr;
-            if (!::CreatePipe(&rd, &wr, &sa, 1 << 20)) return ErrJson("创建管道失败");
-            ::SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
-            STARTUPINFOW si{};
-            si.cb = sizeof(si);
-            si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-            si.wShowWindow = SW_HIDE;
-            si.hStdOutput = wr;
-            si.hStdError = wr;
-            PROCESS_INFORMATION pi{};
-            std::wstring cmd = L"\"" + cli + L"\" -p \"" + src + L"\"";
-            std::vector<wchar_t> buf(cmd.begin(), cmd.end());
-            buf.push_back(0);
-            const BOOL ok = ::CreateProcessW(nullptr, buf.data(), nullptr, nullptr, TRUE,
-                                             CREATE_NO_WINDOW, nullptr, tmpDir.c_str(), &si, &pi);
-            ::CloseHandle(wr);
             std::vector<unsigned char> wav;
-            if (ok) {
-                ::CloseHandle(pi.hThread);
-                unsigned char chunk[65536];
-                DWORD got = 0;
-                while (::ReadFile(rd, chunk, sizeof(chunk), &got, nullptr) && got > 0)
-                    wav.insert(wav.end(), chunk, chunk + got);
-                ::WaitForSingleObject(pi.hProcess, 15000);
-                ::CloseHandle(pi.hProcess);
-            }
-            ::CloseHandle(rd);
-            if (wav.size() < 44) return ErrJson("解码失败（格式不支持或文件损坏）");
+            if (!VgDecodeWem(cli, tmpDir, src, wav))
+                return ErrJson("解码失败（格式不支持或文件损坏）");
             // 走统一试听链（底部播放条可显示/拖动进度）
             const int nbytes = (int)wav.size();
             const std::size_t cut = path.find_last_of("\\/");
@@ -6096,6 +6109,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             bankmod::BankFile bf;
             std::string err;
             if (!bankmod::LoadBank(Utf8ToWide(path), bf, err)) return ErrJson(BankLoadHint(path, err));
+            im->bankCache = std::make_shared<bankmod::BankFile>(bf);   // 后续 play / 算时长 直接复用
+            im->bankCachePath = path;
             JVal arr = JVal::arr();
             for (std::size_t i = 0; i < bf.media.size(); ++i) {
                 const bankmod::MediaEntry& m = bf.media[i];
@@ -6125,6 +6140,116 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             d.set("count", JVal((int)bf.media.size()));
             d.set("media", arr);
             d.set("hasWwise", JVal(!bankmod::FindWwiseConsole().empty()));
+            return OkJson(d);
+        }
+
+        if (method == "bank.durations") {
+            // 列表里要显示「0:59(2.11MB)」：大小直接有，时长要问解码器。
+            //   vgmstream-cli -I 一次可以喂多个文件、一行一个 JSON（含 numberOfSamples/sampleRate），
+            //   所以先把还没算过的 wem 抽到临时目录，再分批问一遍，结果按 media id 缓存。
+            const std::string path = Trim(p.optStr("path"));
+            if (path.empty()) return ErrJson("缺少 path");
+            std::string err;
+            std::shared_ptr<bankmod::BankFile> bf = im->GetBank(path, err);
+            if (!bf) return ErrJson(BankLoadHint(path, err));
+
+            std::wstring cli = Utf8ToWide(im->exeDir) + L"wemkit\\vgmstream\\vgmstream-cli.exe";
+            if (::GetFileAttributesW(cli.c_str()) == INVALID_FILE_ATTRIBUTES)
+                cli = Utf8ToWide(im->exeDir) + L"tools\\vgmstream\\vgmstream-cli.exe";
+            const bool hasCli = ::GetFileAttributesW(cli.c_str()) != INVALID_FILE_ATTRIBUTES;
+
+            std::wstring tmpDir = Utf8ToWide(im->exeDir) + L"wemkit\\tmp\\dur";
+            ::CreateDirectoryW((Utf8ToWide(im->exeDir) + L"wemkit\\tmp").c_str(), nullptr);
+            ::CreateDirectoryW(tmpDir.c_str(), nullptr);
+
+            std::vector<long long> pendId;
+            std::vector<std::wstring> pendFile;
+            for (std::size_t i = 0; i < bf->media.size() && hasCli; ++i) {
+                const bankmod::MediaEntry& m = bf->media[i];
+                if (im->wemDurCache.count((long long)m.id)) continue;
+                std::vector<uint8_t> wem;
+                if (!bankmod::ExtractWem(*bf, m.id, wem)) continue;
+                wchar_t nm[64] = {};
+                ::swprintf_s(nm, L"\\d_%u.wem", (unsigned)m.id);
+                const std::wstring f = tmpDir + nm;
+                HANDLE h = ::CreateFileW(f.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                         FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (h == INVALID_HANDLE_VALUE) continue;
+                DWORD wr0 = 0;
+                ::WriteFile(h, wem.data(), (DWORD)wem.size(), &wr0, nullptr);
+                ::CloseHandle(h);
+                pendId.push_back((long long)m.id);
+                pendFile.push_back(f);
+            }
+
+            // 分批探测（命令行长度有限，一次 64 个足够快也不会溢出）
+            for (std::size_t base = 0; base < pendFile.size(); base += 64) {
+                const std::size_t end = (base + 64 < pendFile.size()) ? base + 64 : pendFile.size();
+                std::wstring cmd = L"\"" + cli + L"\" -I";
+                for (std::size_t k = base; k < end; ++k) cmd += L" \"" + pendFile[k] + L"\"";
+                SECURITY_ATTRIBUTES sa{};
+                sa.nLength = sizeof(sa);
+                sa.bInheritHandle = TRUE;
+                HANDLE rd = nullptr, wr = nullptr;
+                if (!::CreatePipe(&rd, &wr, &sa, 1 << 20)) break;
+                ::SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+                STARTUPINFOW si{};
+                si.cb = sizeof(si);
+                si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+                si.wShowWindow = SW_HIDE;
+                si.hStdOutput = wr;
+                si.hStdError = wr;
+                PROCESS_INFORMATION pi{};
+                std::vector<wchar_t> buf(cmd.begin(), cmd.end());
+                buf.push_back(0);
+                const BOOL ok = ::CreateProcessW(nullptr, buf.data(), nullptr, nullptr, TRUE,
+                                                 CREATE_NO_WINDOW, nullptr, tmpDir.c_str(), &si, &pi);
+                ::CloseHandle(wr);
+                std::string out;
+                if (ok) {
+                    ::CloseHandle(pi.hThread);
+                    char chunk[65536];
+                    DWORD got = 0;
+                    while (::ReadFile(rd, chunk, sizeof(chunk), &got, nullptr) && got > 0)
+                        out.append(chunk, got);
+                    ::WaitForSingleObject(pi.hProcess, 120000);
+                    ::CloseHandle(pi.hProcess);
+                }
+                ::CloseHandle(rd);
+
+                std::size_t lineStart = 0;
+                std::size_t idx = base;
+                while (lineStart <= out.size() && idx < end) {
+                    const std::size_t nl = out.find('\n', lineStart);
+                    const std::string line = out.substr(lineStart, (nl == std::string::npos ? out.size() : nl) - lineStart);
+                    lineStart = (nl == std::string::npos) ? out.size() + 1 : nl + 1;
+                    const std::size_t ps = line.find("\"sampleRate\":");
+                    const std::size_t pn = line.find("\"numberOfSamples\":");
+                    if (ps == std::string::npos || pn == std::string::npos) continue;
+                    const long long rate = std::atoll(line.c_str() + ps + 13);
+                    const long long samples = std::atoll(line.c_str() + pn + 18);
+                    if (rate > 0 && samples > 0)
+                        im->wemDurCache[pendId[idx]] = (int)(samples * 1000 / rate);
+                    else
+                        im->wemDurCache[pendId[idx]] = 0;      // 0 = 解不出来（界面显示 --）
+                    ++idx;
+                }
+            }
+            for (std::size_t k = 0; k < pendFile.size(); ++k) ::DeleteFileW(pendFile[k].c_str());
+
+            JVal arr = JVal::arr();
+            for (std::size_t i = 0; i < bf->media.size(); ++i) {
+                const bankmod::MediaEntry& m = bf->media[i];
+                const std::unordered_map<long long, int>::const_iterator it = im->wemDurCache.find((long long)m.id);
+                JVal o = JVal::obj();
+                o.set("id", JVal((long long)m.id));
+                o.set("size", JVal((int)m.size));
+                o.set("ms", JVal(it != im->wemDurCache.end() ? it->second : 0));
+                arr.push(o);
+            }
+            JVal d = JVal::obj();
+            d.set("count", JVal((int)bf->media.size()));
+            d.set("items", arr);
             return OkJson(d);
         }
 

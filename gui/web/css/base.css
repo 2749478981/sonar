@@ -867,4 +867,7 @@ td .enbox{width:15px; height:15px; margin:0 7px 0 0; vertical-align:middle; curs
 .pvbar .pvtime{flex:none; font-size:11.5px; color:var(--muted);
                font-variant-numeric:tabular-nums}
 .pvbar .pvsbtn{flex:none; padding:3px 10px; font-size:11.5px}
+.pvbar .pvsbtn.on{color:var(--accent); border-color:var(--accent)}
+.pvbar.paused .pvname{opacity:.65}
+.pvbar.paused .pvseek::-webkit-slider-runnable-track{opacity:.6}
 html.overlay-mode .pvbar{display:none !important}
