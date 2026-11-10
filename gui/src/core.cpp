@@ -4893,11 +4893,15 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             // 记住拖之前的总时长：StopAllPreview 会把它清零，界面就会"跳回开头 + 消失一下"。
             const int durKeep = (int)gPvDurMs.load(std::memory_order_relaxed);
             StopAllPreview();
+            gPvSeeking.store(true, std::memory_order_relaxed);
+            // ★ stopFirst 必须传 false：这两个函数内部还会再调一次 StopAllPreview，
+            //   那会把刚写回的时长/位置又清成 0 —— 界面就会先跳回开头一瞬再跳到目标位置
+            //   （用户报"点 20s 会跳回最开始一瞬间"）。
+            if (buf) PlayPreviewBytes(*buf, name, gain, (unsigned)ms, false);
+            else PlayPreviewFile(path, gain, 0, false, (unsigned)ms);
+            // 在派发之后再把状态写回去：无论内部有没有清零，界面看到的都是目标位置
             gPvDurMs.store(durKeep, std::memory_order_relaxed);
             gPvPosMs.store(ms, std::memory_order_relaxed);
-            gPvSeeking.store(true, std::memory_order_relaxed);
-            if (buf) PlayPreviewBytes(*buf, name, gain, (unsigned)ms);
-            else PlayPreviewFile(path, gain, 0, true, (unsigned)ms);
             JVal d = JVal::obj();
             d.set("pos", JVal(ms));
             return OkJson(d);
@@ -5469,7 +5473,14 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
 
             // 走统一试听链：底部播放条能显示进度、也能拖进度（不再是 PlaySound 一次播完）
             const int nbytes = (int)wav.size();
-            const std::string label = bf.name + " · media " + std::to_string(media);
+            // 播放条上要能看出"这是列表里的第几条"：序号取自 bank 里的位置（与表格序号列一致）
+            int seq = 0;
+            for (std::size_t mi = 0; mi < bf.media.size(); ++mi) {
+                if ((long long)bf.media[mi].id == (long long)media) { seq = bf.media[mi].seq; break; }
+            }
+            std::string label = bf.name;
+            if (seq > 0) label += " · 第 " + std::to_string(seq) + " 个";
+            label += " · media " + std::to_string(media);
             PlayPreviewBytes(std::move(wav), label, 1.0f);
             JVal d = JVal::obj();
             d.set("played", JVal(true));

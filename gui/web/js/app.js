@@ -1021,8 +1021,9 @@ function renderBank() {
   const show = rows.slice(0, 800);
   show.forEach(m => {
     const rep = BANK.reps[m.id] || '';
-    tb.appendChild(h('tr', {},
-      h('td', { class: 'lmt' }, String(m.seqInBank || m.seq)),
+    const on = (m.id === playingMedia);
+    tb.appendChild(h('tr', { class: on ? 'on' : '' }, 
+      h('td', { class: 'lmt' }, on ? '▶ ' + String(m.seqInBank || m.seq) : String(m.seqInBank || m.seq)),
       h('td', {}, h('span', { class: 'nm', title: m.custom ? m.name : '', text: bankMediaName(m) })),
       h('td', { class: 'fsm', style: 'color:var(--c-blue)' }, String(m.id)),
       h('td', { class: 'lmt', title: `${m.size} 字节` }, bankSizeText(m)),
@@ -1035,12 +1036,12 @@ function renderBank() {
             if ((m.ms || 0) > 30000) toast(`正在解码 ${bankSizeText(m)}…`, 'ok', 'play');
             const r = await Backend.call('bank.play', { path: BANK.path, media: m.id });
             if (!r.played) toast('播放失败（解码器可能没就位）', 'err');
-            else { playingMedia = m.id; toast(`播放中：media ${m.id}`, 'ok', 'play'); }
+            else { playingMedia = m.id; renderBank(); toast(`播放中：第 ${m.seqInBank || m.seq} 个 · media ${m.id}`, 'ok', 'play'); }
           } catch (e) { toast('播放失败：' + e.message, 'err'); }
         } }, '播放'),
         h('button', { title: '停止播放', onclick: async () => {
           try { await Backend.call('bank.stopPlay', {}); } catch (e) {}
-          playingMedia = 0;
+          playingMedia = 0; renderBank();
         } }, '停止'),
         rep ? h('button', { title: '试听你选的替换音频\n' + rep, onclick: async () => {
           try {
@@ -2892,6 +2893,11 @@ async function pvPoll() {
   let st = null;
   try { st = await Backend.call('sound.previewState', {}); } catch (e) { st = null; }
   pvApply(st);
+  // 播完/被停止后把音效包列表里的高亮撤掉（用户要能一眼看出在播哪一条）
+  if (playingMedia && st && !st.playing && !st.seeking) {
+    playingMedia = 0;
+    try { renderBank(); } catch (e) {}
+  }
   clearTimeout(PV.timer);
   // 跳转中也要按快节奏轮询，才能第一时间接上新声部的进度
   PV.timer = setTimeout(pvPoll, (st && (st.playing || st.seeking)) ? 250 : 1200);
