@@ -217,15 +217,48 @@ std::wstring EnsureProjectFor(const std::wstring& console, const std::string& ve
                              L"\" --platform Windows --quiet";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-    std::vector<wchar_t> buf(cmd.begin(), cmd.end());
-    buf.push_back(0);
-    if (!::CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
-                          nullptr, nullptr, &si, &pi)) return std::wstring();
-    ::WaitForSingleObject(pi.hProcess, 120000);
-    ::CloseHandle(pi.hProcess);
-    ::CloseHandle(pi.hThread);
-    if (::GetFileAttributesW(proj.c_str()) == INVALID_FILE_ATTRIBUTES) return std::wstring();
+    // 生成过程也记日志：不同 Wwise 版本的 create-new-project 参数不完全一样，
+    // 失败时能从日志看出到底是"命令不认识"还是"缺参数"。
+    // 注意：日志不能放进工程目录 —— create-new-project 要求那个目录由它自己创建。
+    const std::wstring genLog = base + L"\\sonar_wwproj_" + std::wstring(mm.begin(), mm.end()) + L".log";
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE hLog = ::CreateFileW(genLog.c_str(), GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hLog != INVALID_HANDLE_VALUE) {
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdOutput = hLog;
+        si.hStdError = hLog;
+    }
+    bool created = false;
+    for (int attempt = 0; attempt < 2 && !created; ++attempt) {
+        // 第一次按新版参数；第二次去掉 --quiet 并把语言也写上（老版本要求 --language）
+        const std::wstring cmd = L"\"" + console + L"\" create-new-project \"" + proj +
+                                 (attempt == 0
+                                      ? L"\" --platform Windows --quiet"
+                                      : L"\" --platform \"Windows\" --language \"English(US)\"");
+        std::vector<wchar_t> buf(cmd.begin(), cmd.end());
+        buf.push_back(0);
+        PROCESS_INFORMATION pi{};
+        if (::CreateProcessW(nullptr, buf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                             nullptr, nullptr, &si, &pi)) {
+            ::WaitForSingleObject(pi.hProcess, 120000);
+            ::CloseHandle(pi.hProcess);
+            ::CloseHandle(pi.hThread);
+        } else if (hLog != INVALID_HANDLE_VALUE) {
+            const char* e = "CreateProcessW 失败\r\n";
+            DWORD wr = 0;
+            ::WriteFile(hLog, e, (DWORD)std::strlen(e), &wr, nullptr);
+        }
+        created = ::GetFileAttributesW(proj.c_str()) != INVALID_FILE_ATTRIBUTES;
+    }
+    if (hLog != INVALID_HANDLE_VALUE) ::CloseHandle(hLog);
+    if (!created) return std::wstring();
+    // 生成出来的工程版本必须和 console 对得上，否则说明这个 console 悄悄用了别的模板
+    const std::string got = WprojVersion(proj);
+    if (!got.empty() && MajorMinorOf(got) != MajorMinorOf(ver)) return std::wstring();
     return proj;
 }
 
