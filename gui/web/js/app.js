@@ -2443,13 +2443,21 @@ async function refreshConvertEnv() {
   try {
     const r = await Backend.call('wem.convertEnv', {});
     const wwise = r.hasWwise
-      ? ('Wwise ✓（' + (r.wwisePath ? shortPath(r.wwisePath) : '可把 wav/mp3/ogg 转成 wem') + '）')
+      ? ('Wwise ✓（' + (r.wwisePath ? shortPath(r.wwisePath) : '可把 wav/mp3/ogg 转成 wem') +
+         (r.wwiseVersion ? ' · ' + r.wwiseVersion : '') +
+         (r.wwiseVersionMatch === false && r.wwiseProjVersion
+           ? '，工程是 ' + r.wwiseProjVersion + ' —— 版本不同可能转换失败' : '') + '）')
       : '未检测到 Wwise ✗ —— 只能替换「已经是 .wem」的文件；要转换其他格式需安装 Wwise（免费，Audiokinetic 官网）';
     const ff = r.hasFfmpeg
       ? ('ffmpeg ✓' + (r.ffmpegPath ? '（' + shortPath(r.ffmpegPath) + '）' : ''))
       : 'ffmpeg ✗（mp3/ogg 转换需要）';
     const vg = r.hasVgmstream ? '试听解码 ✓' : '试听解码 ✗（缺 wemkit\\vgmstream）';
     el.textContent = '转换环境：' + wwise + '　|　' + ff + '　|　' + vg;
+    // 手动指定的 Wwise 被自动查找顶替（文件没了 / 不是完整安装）时要说明白，
+    // 否则用户以为"已指定"却还是转换失败。
+    if (r.wwiseManualIgnored) {
+      el.textContent += '　（之前指定的 Wwise 不能用，已改用自动找到的）';
+    }
     // 手动指定 ffmpeg：装了却放在别处（或以前版本装过）时用；自动查找后端已经做了
     const pick = document.createElement('button');
     pick.className = 'nav';
@@ -2491,7 +2499,7 @@ async function refreshConvertEnv() {
       } catch (e) { toast('指定失败：' + e.message, 'err'); }
     };
     el.appendChild(wpick);
-    if (r.wwiseManual) {
+    if (r.wwiseManual || r.wwiseManualIgnored) {
       const wauto = document.createElement('button');
       wauto.className = 'nav';
       wauto.style.marginLeft = '6px';

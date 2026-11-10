@@ -26,6 +26,7 @@
 #include <objbase.h>
 #include <string>
 #include <cmath>
+#include <functional>   // std::function（WebView2 环境创建失败后的重试）
 #include <cstdio>
 #include <cstdarg>
 #include <wrl.h>
@@ -1049,6 +1050,12 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         LogLine("assetsdiag: %s", g_core.Handle("assets.diag", "{}").c_str());
         // 转换环境（ffmpeg / Wwise / vgmstream）：用户"明明装了 ffmpeg 却报找不到"时看这一行
         LogLine("convertenv: %s", g_core.Handle("wem.convertEnv", "{}").c_str());
+        // 设置 WSE_SELFTEST=1 启动时跑一次转换自检（ffmpeg + Wwise），排查"导出没产出 wem"
+        {
+            wchar_t st[8] = {};
+            if (::GetEnvironmentVariableW(L"WSE_SELFTEST", st, 8) > 0 && st[0] == L'1')
+                LogLine("wemSelftest: %s", g_core.Handle("wem.selftest", "{}").c_str());
+        }
     }
     ::ShowWindow(hwnd, SW_SHOW);
     ::UpdateWindow(hwnd);
@@ -1100,14 +1107,29 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     g_ovPrefPath = webRoot + L"Sonar_Overlay.json";
     LoadOverlayPrefs();
 
-    HRESULT hr = createEnv(
-        nullptr, dataDir.c_str(), nullptr,
-        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [webRoot](HRESULT res, ICoreWebView2Environment* env) -> HRESULT {
+    // WebView2 的用户数据目录被上一个残留进程占着时，环境创建会返回 ERROR_BUSY
+    // (0x800700AA)：这时换一个独立目录再试一次，比弹框让用户自己去任务管理器杀进程好得多。
+    static HRESULT s_envHr = S_OK;
+    static bool s_envRetried = false;
+    static std::wstring s_envDir = dataDir;
+    static ComPtr<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler> s_envHandler;
+    static std::function<void()> s_beginEnv;
+
+    s_envHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [webRoot, dataDir](HRESULT res, ICoreWebView2Environment* env) -> HRESULT {
                 g_env = env; if (g_env) g_env->AddRef();   // 浮窗复用同一个 Environment
                 if (g_ovWantOn) { ShowOverlay(true); LogLine("overlay: restored on startup"); }
                 LogLine("env handler: hr=0x%08X env=%p", (unsigned)res, (void*)env);
                 if (FAILED(res) || !env) {
+                    // ERROR_BUSY：共享的用户数据目录被残留的 msedgewebview2 占着。
+                    // 换一个只属于本进程的目录重试一次（代价是这次启动没有旧缓存）。
+                    if (!s_envRetried && (unsigned)res == 0x800700AAu) {
+                        s_envRetried = true;
+                        s_envDir = dataDir + L"_p" + std::to_wstring((unsigned long)::GetCurrentProcessId());
+                        LogLine("env busy(0x800700AA) -> retry with dir=%s", WideToUtf8(s_envDir).c_str());
+                        s_beginEnv();
+                        return S_OK;
+                    }
                     ::MessageBoxW(g_hwnd,
                         L"WebView2 初始化失败。\n\n"
                         L"请确认已安装 Microsoft Edge WebView2 Runtime"
@@ -1235,8 +1257,14 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                             return S_OK;
                         }).Get());
                 return S_OK;
-            }).Get());
+            }).Get();
 
+    // 环境创建放进一个可重入的小函数：失败(ERROR_BUSY)时回调里能再调一次。
+    s_beginEnv = [createEnv]() {
+        s_envHr = createEnv(nullptr, s_envDir.c_str(), nullptr, s_envHandler.Get());
+    };
+    s_beginEnv();
+    HRESULT hr = s_envHr;
     LogLine("createEnv hr=0x%08X", (unsigned)hr);
     if (FAILED(hr)) {
         ::MessageBoxW(hwnd, L"无法启动 WebView2。", L"Sonar 配置工具", MB_ICONERROR);

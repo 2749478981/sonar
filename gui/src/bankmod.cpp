@@ -88,6 +88,62 @@ std::string ToUtf8(const std::wstring& w) {
     return s;
 }
 
+// 读日志尾部（WwiseConsole 的输出可能很大，且可能是 UTF-16）：给用户看"到底哪一步错了"。
+//   压成单行、去掉空行，最多 keep 个字符。
+std::string ReadTailUtf8(const std::wstring& path, std::size_t keep) {
+    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return std::string();
+    LARGE_INTEGER sz{};
+    std::string raw;
+    if (::GetFileSizeEx(h, &sz) && sz.QuadPart > 0) {
+        const long long want = (std::min)((long long)(1LL << 20), sz.QuadPart);
+        raw.resize((std::size_t)want);
+        ::SetFilePointer(h, (LONG)(sz.QuadPart - want), nullptr, FILE_BEGIN);
+        DWORD rd = 0;
+        ::ReadFile(h, &raw[0], (DWORD)want, &rd, nullptr);
+        raw.resize(rd);
+    }
+    ::CloseHandle(h);
+    std::wstring w;
+    if (raw.size() >= 2 && (unsigned char)raw[0] == 0xFF && (unsigned char)raw[1] == 0xFE) {
+        w.assign((const wchar_t*)(raw.data() + 2), (raw.size() - 2) / 2);
+    } else if (raw.size() >= 2 && (unsigned char)raw[0] == 0xFE && (unsigned char)raw[1] == 0xFF) {
+        const std::size_t n = (raw.size() - 2) / 2;
+        w.reserve(n);
+        for (std::size_t i = 0; i < n; ++i)
+            w.push_back((wchar_t)(((unsigned char)raw[2 + i * 2] << 8) | (unsigned char)raw[3 + i * 2]));
+    } else {
+        const int n = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                            raw.c_str(), (int)raw.size(), nullptr, 0);
+        if (n > 0) {
+            w.resize(n);
+            ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, raw.c_str(), (int)raw.size(), &w[0], n);
+        } else {
+            const int m = ::MultiByteToWideChar(CP_ACP, 0, raw.c_str(), (int)raw.size(), nullptr, 0);
+            if (m > 0) { w.resize(m); ::MultiByteToWideChar(CP_ACP, 0, raw.c_str(), (int)raw.size(), &w[0], m); }
+        }
+    }
+    std::string out;
+    out.reserve(w.size());
+    for (wchar_t c : w) {
+        if (c == L'\r' || c == L'\n' || c == L'\t') out.push_back(' ');
+        else if (c < 0x20) continue;
+        else out += ToUtf8(std::wstring(1, c));
+    }
+    // 压掉连续空格
+    std::string squeezed;
+    squeezed.reserve(out.size());
+    bool sp = false;
+    for (char c : out) {
+        if (c == ' ') { if (!sp) squeezed.push_back(c); sp = true; }
+        else { squeezed.push_back(c); sp = false; }
+    }
+    while (!squeezed.empty() && squeezed.back() == ' ') squeezed.pop_back();
+    if (squeezed.size() > keep) squeezed = "…" + squeezed.substr(squeezed.size() - keep);
+    return squeezed;
+}
+
 bool LoadPackage(BankFile& out, std::string& err) {
     const std::vector<uint8_t>& b = out.bytes;
     if (b.size() < 32) { err = "npck 文件太小（不足一个文件包的头部）"; return false; }
@@ -465,22 +521,47 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
     // 3) WwiseConsole 转换（输出到 <workDir>\out\Windows\*.wem）
     const std::wstring outDir = workDir + L"\\out";
     ::CreateDirectoryW(outDir.c_str(), nullptr);
-    std::wstring cmd = L"\"" + wwiseProj + L"\"";
+    const std::wstring winDir = outDir + L"\\Windows\\";
+    // ★ 先清掉上次留下的 wem：否则这次转换失败时，我们会把旧文件当成"成功"
+    {
+        WIN32_FIND_DATAW ofd{};
+        HANDLE oh = ::FindFirstFileW((winDir + L"*.wem").c_str(), &ofd);
+        if (oh != INVALID_HANDLE_VALUE) {
+            do { ::DeleteFileW((winDir + ofd.cFileName).c_str()); } while (::FindNextFileW(oh, &ofd));
+            ::FindClose(oh);
+        }
+    }
     // 用户手动指定的优先（Wwise 装在别的盘/改过目录名），指定失效再退回自动查找
     std::wstring console = wwiseConsoleExe;
     if (!console.empty() && ::GetFileAttributesW(console.c_str()) == INVALID_FILE_ATTRIBUTES)
         console.clear();
     if (console.empty()) console = FindWwiseConsole();
     if (console.empty()) { log = "找不到 WwiseConsole.exe（需要装 Wwise，或设 WWISEROOT 环境变量）"; return false; }
+    // 输出到日志文件（不再用 --quiet）：失败时把日志尾巴贴给用户，否则只剩一句"没有产出 wem"
+    const std::wstring logPath = workDir + L"\\wwise.log";
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE hLog = ::CreateFileW(logPath.c_str(), GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     std::wstring full = L"\"" + console + L"\" convert-external-source \"" + wwiseProj +
-                        L"\" --source-file \"" + listPath + L"\" --output \"" + outDir + L"\" --quiet";
+                        L"\" --source-file \"" + listPath + L"\" --output \"" + outDir + L"\"";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
+    if (hLog != INVALID_HANDLE_VALUE) {
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdOutput = hLog;
+        si.hStdError = hLog;
+        si.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
+    }
     PROCESS_INFORMATION pi{};
     std::vector<wchar_t> buf(full.begin(), full.end());
     buf.push_back(0);
-    if (!::CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE,
+    if (!::CreateProcessW(nullptr, buf.data(), nullptr, nullptr,
+                          (hLog != INVALID_HANDLE_VALUE) ? TRUE : FALSE,
                           CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        if (hLog != INVALID_HANDLE_VALUE) ::CloseHandle(hLog);
         log = "WwiseConsole 启动失败";
         return false;
     }
@@ -489,15 +570,26 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
     ::GetExitCodeProcess(pi.hProcess, &code);
     ::CloseHandle(pi.hProcess);
     ::CloseHandle(pi.hThread);
-    (void)cmd;
+    if (hLog != INVALID_HANDLE_VALUE) ::CloseHandle(hLog);
 
     // 4) 收集结果（<outDir>\Windows\*.wem）
-    const std::wstring winDir = outDir + L"\\Windows\\";
     WIN32_FIND_DATAW fd{};
     HANDLE fh = ::FindFirstFileW((winDir + L"*.wem").c_str(), &fd);
     if (fh == INVALID_HANDLE_VALUE) {
-        log = "Wwise 没有产出 wem（工程缺少 Windows 平台？转换设置？退出码 " +
-              std::to_string((int)code) + "）";
+        log = "Wwise 没有产出 wem（退出码 " + std::to_string((int)code) + "）";
+        // 明确的"装得不全"：完整安装里 Authoring\Data 一定在 bin 往上三层
+        {
+            std::wstring up = console;
+            for (int i = 0; i < 3 && !up.empty(); ++i) {
+                std::size_t sl = up.find_last_of(L"\\/");
+                if (sl == std::wstring::npos) { up.clear(); break; }
+                up.resize(sl);
+            }
+            if (!up.empty() && ::GetFileAttributesW((up + L"\\Data").c_str()) == INVALID_FILE_ATTRIBUTES)
+                log += "。这个 WwiseConsole 看着不是完整安装（缺少同级的 Authoring\\Data）";
+        }
+        const std::string tail = ReadTailUtf8(logPath, 900);
+        if (!tail.empty()) log += "。日志：" + tail;
         return false;
     }
     do {

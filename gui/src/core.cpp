@@ -45,6 +45,7 @@
 #include <unordered_map>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <cwchar>
 #include <map>
@@ -731,15 +732,53 @@ static std::wstring FindFfmpegExe(const std::string& exeDirUtf8, const std::stri
     return std::wstring();
 }
 
+// exe 的文件版本（"2023.1.13.8732"）。取不到返回空串。
+static std::string FileVersionOf(const std::wstring& exe) {
+    DWORD dummy = 0;
+    const DWORD sz = ::GetFileVersionInfoSizeW(ExtendPath(exe).c_str(), &dummy);
+    if (sz == 0) return std::string();
+    std::vector<unsigned char> buf(sz);
+    if (!::GetFileVersionInfoW(ExtendPath(exe).c_str(), 0, sz, buf.data())) return std::string();
+    VS_FIXEDFILEINFO* fi = nullptr;
+    UINT len = 0;
+    if (!::VerQueryValueW(buf.data(), L"\\", (LPVOID*)&fi, &len) || !fi || len < sizeof(VS_FIXEDFILEINFO))
+        return std::string();
+    char out[64] = {};
+    std::snprintf(out, sizeof(out), "%u.%u.%u.%u",
+                  (unsigned)(fi->dwFileVersionMS >> 16), (unsigned)(fi->dwFileVersionMS & 0xFFFF),
+                  (unsigned)(fi->dwFileVersionLS >> 16), (unsigned)(fi->dwFileVersionLS & 0xFFFF));
+    return std::string(out);
+}
+
+// "这个 WwiseConsole 是不是一份完整安装"：完整安装的 ...\Authoring\x64\Release\bin\WwiseConsole.exe
+// 往上四层就是 Authoring，它同级一定有个 Data 目录（转换用的插件数据都在里面）。
+// 从压缩包里解出来的残缺拷贝只有 bin（转换必然 exit 1），要能识别出来。
+static bool WwiseLooksComplete(const std::wstring& exe) {
+    std::wstring up = exe;
+    for (int i = 0; i < 4; ++i) {   // WwiseConsole.exe -> bin -> Release -> x64 -> Authoring
+        const std::size_t sl = up.find_last_of(L"\\/");
+        if (sl == std::wstring::npos) return false;
+        up.resize(sl);
+    }
+    const std::wstring data = ExtendPath(up + L"\\Data");
+    const DWORD a = ::GetFileAttributesW(data.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
 // WwiseConsole.exe：先看用户手动指定的，再退回自动查找（WWISEROOT / 扫所有固定盘）。
 // 手动指定的文件被删了也不要紧 —— 自动退回，不会因为一个过期设置就一直报"找不到"。
+// 手动指定但残缺（缺 Authoring\Data）时也退回自动查找：机器上装了完整版就别让用户卡在坏路径上。
 static std::wstring FindWwiseConsoleEx(const std::string& configuredUtf8) {
     const std::string cfg = Trim(configuredUtf8);
+    std::wstring mine;
     if (!cfg.empty()) {
         const std::wstring w = Utf8ToWide(cfg);
-        if (::GetFileAttributesW(ExtendPath(w).c_str()) != INVALID_FILE_ATTRIBUTES) return w;
+        if (::GetFileAttributesW(ExtendPath(w).c_str()) != INVALID_FILE_ATTRIBUTES) mine = w;
     }
-    return bankmod::FindWwiseConsole();
+    if (!mine.empty() && WwiseLooksComplete(mine)) return mine;
+    const std::wstring found = bankmod::FindWwiseConsole();
+    if (!found.empty() && found != mine) return found;
+    return mine.empty() ? found : mine;
 }
 
 // 原子复制。失败时把原因写进 why（给用户看具体卡在哪一步）。
@@ -6337,7 +6376,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             d.set("ext", JVal(std::string(bf.Ext())));
             d.set("count", JVal((int)bf.media.size()));
             d.set("media", arr);
-            d.set("hasWwise", JVal(!bankmod::FindWwiseConsole().empty()));
+            d.set("hasWwise", JVal(!FindWwiseConsoleEx(im->prefs.wwisePath).empty()));
             return OkJson(d);
         }
 
@@ -6544,8 +6583,93 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             d.set("hasFfmpeg", JVal(hasFf));
             d.set("ffmpegPath", JVal(Utf8FromWide(ff)));
             d.set("ffmpegManual", JVal(!im->prefs.ffmpegPath.empty()));
-            d.set("wwiseManual", JVal(!im->prefs.wwisePath.empty()));
+            // 手动指定的路径被自动查找顶替（文件不在 / 不是完整安装）时，界面上就不该再显示"手动指定"，
+            // 否则用户看着"已指定"却还是转换失败，会以为是我们的问题。
+            const bool wwiseManual = !im->prefs.wwisePath.empty() &&
+                                     !wwise.empty() && wwise == Utf8ToWide(Trim(im->prefs.wwisePath));
+            d.set("wwiseManual", JVal(wwiseManual));
+            d.set("wwiseManualIgnored", JVal(!im->prefs.wwisePath.empty() && !wwiseManual));
+            // 版本对不上是"转换没产出 wem"最常见的原因之一：把两边的版本都报出来，
+            // 界面可以直接提示"工程是 2023.1.13，你的 WwiseConsole 是 X"。
+            {
+                std::string cver, pver;
+                if (!wwise.empty()) cver = FileVersionOf(wwise);
+                const std::wstring proj = Utf8ToWide(im->exeDir) +
+                    L"wemkit\\wavtowemscript\\wavtowemscript.wproj";
+                HANDLE h = ::CreateFileW(ExtendPath(proj).c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                         nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (h != INVALID_HANDLE_VALUE) {
+                    char raw[8192] = {};
+                    DWORD rd = 0;
+                    ::ReadFile(h, raw, sizeof(raw) - 1, &rd, nullptr);
+                    ::CloseHandle(h);
+                    const std::string s(raw, rd);
+                    const std::string key = "WwiseVersion=\"";
+                    const std::size_t p = s.find(key);
+                    if (p != std::string::npos) {
+                        const std::size_t e = s.find('"', p + key.size());
+                        if (e != std::string::npos) pver = s.substr(p + key.size(), e - p - key.size());
+                        if (!pver.empty() && pver[0] == 'v') pver.erase(0, 1);
+                    }
+                }
+                auto head2 = [](const std::string& v) {
+                    std::size_t a = v.find('.');
+                    if (a == std::string::npos) return v;
+                    std::size_t b = v.find('.', a + 1);
+                    return (b == std::string::npos) ? v : v.substr(0, b);
+                };
+                const bool match = (!cver.empty() && !pver.empty() && head2(cver) == head2(pver));
+                d.set("wwiseVersion", JVal(cver));
+                d.set("wwiseProjVersion", JVal(pver));
+                d.set("wwiseVersionMatch", JVal(match));
+            }
             d.set("hasVgmstream", JVal(hasVg));
+            return OkJson(d);
+        }
+
+        // 转换自检：自己造一个 0.25 秒的 wav 跑一遍 ffmpeg + Wwise，用来定位
+        // 「导出时提示 Wwise 没有产出 wem」到底是环境问题还是文件问题。
+        if (method == "wem.selftest") {
+            std::wstring work = Utf8ToWide(im->exeDir) + L"wemkit\\tmp";
+            ::CreateDirectoryW(work.c_str(), nullptr);
+            const std::wstring sample = work + L"\\selftest.wav";
+            // 48000Hz / 2ch / 16bit / 0.25s 的 440Hz 正弦
+            {
+                const int rate = 48000, ch = 2, frames = rate / 4;
+                std::vector<unsigned char> wav;
+                const unsigned dataBytes = (unsigned)(frames * ch * 2);
+                auto put = [&](const char* p, int n) { wav.insert(wav.end(), (const unsigned char*)p, (const unsigned char*)p + n); };
+                auto put32 = [&](unsigned v) { unsigned char b[4] = { (unsigned char)v, (unsigned char)(v >> 8), (unsigned char)(v >> 16), (unsigned char)(v >> 24) }; wav.insert(wav.end(), b, b + 4); };
+                auto put16 = [&](unsigned short v) { unsigned char b[2] = { (unsigned char)v, (unsigned char)(v >> 8) }; wav.insert(wav.end(), b, b + 2); };
+                put("RIFF", 4); put32(36 + dataBytes); put("WAVE", 4);
+                put("fmt ", 4); put32(16); put16(1); put16((unsigned short)ch);
+                put32((unsigned)rate); put32((unsigned)(rate * ch * 2));
+                put16((unsigned short)(ch * 2)); put16(16);
+                put("data", 4); put32(dataBytes);
+                for (int f = 0; f < frames; ++f) {
+                    const double t = (double)f / rate;
+                    const short v = (short)(std::sin(2.0 * 3.14159265358979 * 440.0 * t) * 8000.0);
+                    put16((unsigned short)v); put16((unsigned short)v);
+                }
+                HANDLE h = ::CreateFileW(ExtendPath(sample).c_str(), GENERIC_WRITE, 0, nullptr,
+                                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (h == INVALID_HANDLE_VALUE) return ErrJson("写自检用的 wav 失败");
+                DWORD wr = 0;
+                ::WriteFile(h, wav.data(), (DWORD)wav.size(), &wr, nullptr);
+                ::CloseHandle(h);
+            }
+            const std::wstring proj = Utf8ToWide(im->exeDir) + L"wemkit\\wavtowemscript\\wavtowemscript.wproj";
+            const std::wstring ff = FindFfmpegExe(im->exeDir, im->prefs.ffmpegPath);
+            const std::wstring ww = FindWwiseConsoleEx(im->prefs.wwisePath);
+            std::vector<std::wstring> wems;
+            std::string log;
+            const bool ok = bankmod::ConvertToWem({ sample }, proj, ff, work, wems, log, ww);
+            ::DeleteFileW(ExtendPath(sample).c_str());
+            JVal d = JVal::obj();
+            d.set("ok2", JVal(ok));
+            d.set("log", JVal(log));
+            d.set("count", JVal((long long)wems.size()));
+            d.set("wwisePath", JVal(Utf8FromWide(ww)));
             return OkJson(d);
         }
 
