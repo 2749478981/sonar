@@ -1000,6 +1000,29 @@ function renderBankShell() {
     : `已导入 ${BANK.media.length} 条：给要换的那条点「选音频」`;
 }
 
+// 播放一条 wem（表格里的「播放」按钮和行双击都走这里）。
+//   已经很在这条上在播 → 再点一次当停止用，符合"双击同一个地方来回切"的直觉。
+async function playBankMedia(m) {
+  if (!m) return;
+  try {
+    if (playingMedia === m.id) {
+      try { await Backend.call('bank.stopPlay', {}); } catch (e) {}
+      playingMedia = 0;
+      renderBank();
+      return;
+    }
+    // 长音频（几分钟的 BGM）解码要十几秒：先给个提示，否则会以为没反应
+    if ((m.ms || 0) > 30000) toast(`正在解码 ${bankSizeText(m)}…`, 'ok', 'play');
+    const r = await Backend.call('bank.play', { path: BANK.path, media: m.id });
+    if (!r.played) toast('播放失败（解码器可能没就位）', 'err');
+    else {
+      playingMedia = m.id;
+      renderBank();
+      toast(`播放中：第 ${m.seqInBank || m.seq} 个 · media ${m.id}`, 'ok', 'play');
+    }
+  } catch (e) { toast('播放失败：' + e.message, 'err'); }
+}
+
 function renderBank() {
   const tb = $('#bankBody2') || $('#bankBody');
   if (tb) tb.innerHTML = '';
@@ -1022,7 +1045,11 @@ function renderBank() {
   show.forEach(m => {
     const rep = BANK.reps[m.id] || '';
     const on = (m.id === playingMedia);
-    tb.appendChild(h('tr', { class: on ? 'on' : '' }, 
+    tb.appendChild(h('tr', {
+      class: on ? 'on' : '',
+      title: '双击播放这条 wem（正在播时双击停止）',
+      ondblclick: (ev) => { if (ev.target && ev.target.closest && ev.target.closest('button')) return; playBankMedia(m); },
+    },
       h('td', { class: 'lmt' }, on ? '▶ ' + String(m.seqInBank || m.seq) : String(m.seqInBank || m.seq)),
       h('td', {}, h('span', { class: 'nm', title: m.custom ? m.name : '', text: bankMediaName(m) })),
       h('td', { class: 'fsm', style: 'color:var(--c-blue)' }, String(m.id)),
@@ -1030,15 +1057,7 @@ function renderBank() {
       h('td', { title: rep, style: 'max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
         rep ? rep.split(/[\\/]/).pop() : '—'),
       h('td', {}, h('div', { class: 'acts' },
-        h('button', { title: '在 GUI 内直接播放这条 wem（底部播放条可拖进度）', onclick: async (ev) => {
-          try {
-            // 长音频（几分钟的 BGM）解码要十几秒：先给个提示，否则会以为没反应
-            if ((m.ms || 0) > 30000) toast(`正在解码 ${bankSizeText(m)}…`, 'ok', 'play');
-            const r = await Backend.call('bank.play', { path: BANK.path, media: m.id });
-            if (!r.played) toast('播放失败（解码器可能没就位）', 'err');
-            else { playingMedia = m.id; renderBank(); toast(`播放中：第 ${m.seqInBank || m.seq} 个 · media ${m.id}`, 'ok', 'play'); }
-          } catch (e) { toast('播放失败：' + e.message, 'err'); }
-        } }, '播放'),
+        h('button', { title: '在 GUI 内直接播放这条 wem（底部播放条可拖进度）', onclick: () => playBankMedia(m) }, '播放'),
         h('button', { title: '停止播放', onclick: async () => {
           try { await Backend.call('bank.stopPlay', {}); } catch (e) {}
           playingMedia = 0; renderBank();
