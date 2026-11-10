@@ -144,8 +144,92 @@ std::string ReadTailUtf8(const std::wstring& path, std::size_t keep) {
     return squeezed;
 }
 
-bool LoadPackage(BankFile& out, std::string& err) {
-    const std::vector<uint8_t>& b = out.bytes;
+// ---------------------------------------------------------------------------
+//  工程版本适配
+//  .wproj 根节点带 SchemaVersion/WwiseVersion/WwiseBuild，这几个字段和生成它的
+//  Wwise 版本绑定：Wwise 只会把旧工程升级上去，绝不降级 —— 用 2022 的
+//  WwiseConsole 打开 2023 的工程必然失败（一句 "newer version" 就退出）。
+//  所以只要 console 的主次版本和工程不一致，就用**用户自己的 console** 现场
+//  create-new-project 生成一份同版本工程（放 %TEMP% 的纯 ASCII 目录，生成一次
+//  复用），再拿它去 convert-external-source。
+// ---------------------------------------------------------------------------
+std::string FileVersionUtf8(const std::wstring& exe) {
+    DWORD dummy = 0;
+    const DWORD size = ::GetFileVersionInfoSizeW(exe.c_str(), &dummy);
+    if (!size) return std::string();
+    std::vector<unsigned char> buf(size);
+    if (!::GetFileVersionInfoW(exe.c_str(), 0, size, buf.data())) return std::string();
+    VS_FIXEDFILEINFO* fi = nullptr;
+    UINT len = 0;
+    if (!::VerQueryValueW(buf.data(), L"\\", (LPVOID*)&fi, &len) || !fi ||
+        len < sizeof(VS_FIXEDFILEINFO)) return std::string();
+    char out[64] = {};
+    std::snprintf(out, sizeof(out), "%u.%u.%u.%u",
+                  (unsigned)(fi->dwFileVersionMS >> 16), (unsigned)(fi->dwFileVersionMS & 0xFFFF),
+                  (unsigned)(fi->dwFileVersionLS >> 16), (unsigned)(fi->dwFileVersionLS & 0xFFFF));
+    return std::string(out);
+}
+
+// 从工程文件里取 WwiseVersion="v2023.1.13" → "2023.1.13"
+std::string WprojVersion(const std::wstring& proj) {
+    std::vector<uint8_t> head;
+    HANDLE h = ::CreateFileW(proj.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return std::string();
+    char buf[2048] = {};
+    DWORD rd = 0;
+    ::ReadFile(h, buf, sizeof(buf) - 1, &rd, nullptr);
+    ::CloseHandle(h);
+    const std::string s(buf, buf + rd);
+    const std::string key = "WwiseVersion=\"v";
+    const size_t at = s.find(key);
+    if (at == std::string::npos) return std::string();
+    const size_t from = at + key.size();
+    size_t to = s.find('"', from);
+    if (to == std::string::npos) return std::string();
+    return s.substr(from, to - from);
+}
+
+// "2022.1.6.8215" → "2022.1"
+std::string MajorMinorOf(const std::string& v) {
+    const size_t a = v.find('.');
+    if (a == std::string::npos) return v;
+    const size_t b = v.find('.', a + 1);
+    return (b == std::string::npos) ? v : v.substr(0, b);
+}
+
+// 用指定 console 生成/复用一个同版本工程；失败返回空。
+std::wstring EnsureProjectFor(const std::wstring& console, const std::string& ver) {
+    std::string mm = MajorMinorOf(ver);
+    if (mm.empty()) return std::wstring();
+    for (char& c : mm) if (c == '.' || (c >= '0' && c <= '9')) {} else c = '_';
+    wchar_t tmpPath[MAX_PATH] = {};
+    if (!::GetTempPathW(MAX_PATH, tmpPath)) return std::wstring();
+    std::wstring base(tmpPath);
+    if (!base.empty() && base.back() == L'\\') base.pop_back();
+    // create-new-project 要求 <目录名>\<同名>.wproj，并且目录必须由它自己建
+    const std::wstring name = L"sonar_wwproj_" + std::wstring(mm.begin(), mm.end());
+    const std::wstring dir = base + L"\\" + name;
+    const std::wstring proj = dir + L"\\" + name + L".wproj";
+    if (::GetFileAttributesW(proj.c_str()) != INVALID_FILE_ATTRIBUTES) return proj;
+
+    const std::wstring cmd = L"\"" + console + L"\" create-new-project \"" + proj +
+                             L"\" --platform Windows --quiet";
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::vector<wchar_t> buf(cmd.begin(), cmd.end());
+    buf.push_back(0);
+    if (!::CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                          nullptr, nullptr, &si, &pi)) return std::wstring();
+    ::WaitForSingleObject(pi.hProcess, 120000);
+    ::CloseHandle(pi.hProcess);
+    ::CloseHandle(pi.hThread);
+    if (::GetFileAttributesW(proj.c_str()) == INVALID_FILE_ATTRIBUTES) return std::wstring();
+    return proj;
+}
+
+bool LoadPackage(BankFile& out, std::string& err) {    const std::vector<uint8_t>& b = out.bytes;
     if (b.size() < 32) { err = "npck 文件太小（不足一个文件包的头部）"; return false; }
     if (Tag(b, 0) != "AKPK") { err = "不是 AKPK 文件包（开头不是 AKPK）"; return false; }
     const uint32_t headerLen = U32(b, 4);
@@ -537,6 +621,21 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
         console.clear();
     if (console.empty()) console = FindWwiseConsole();
     if (console.empty()) { log = "找不到 WwiseConsole.exe（需要装 Wwise，或设 WWISEROOT 环境变量）"; return false; }
+    // 工程版本不一致时现场生成一份同版本工程（否则 2022 的 console 打不开 2023 的工程）
+    std::wstring proj = wwiseProj;
+    {
+        const std::string cver = FileVersionUtf8(console);
+        const std::string pver = WprojVersion(wwiseProj);
+        if (!cver.empty() && !pver.empty() && MajorMinorOf(cver) != MajorMinorOf(pver)) {
+            const std::wstring alt = EnsureProjectFor(console, cver);
+            if (!alt.empty()) {
+                proj = alt;
+            } else {
+                log += "（工程是 " + pver + "，而这个 WwiseConsole 是 " + cver +
+                       "：自动生成同版本工程失败）";
+            }
+        }
+    }
     // 输出到日志文件（不再用 --quiet）：失败时把日志尾巴贴给用户，否则只剩一句"没有产出 wem"
     const std::wstring logPath = workDir + L"\\wwise.log";
     SECURITY_ATTRIBUTES sa{};
@@ -545,7 +644,7 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
     HANDLE hLog = ::CreateFileW(logPath.c_str(), GENERIC_WRITE,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    std::wstring full = L"\"" + console + L"\" convert-external-source \"" + wwiseProj +
+    std::wstring full = L"\"" + console + L"\" convert-external-source \"" + proj +
                         L"\" --source-file \"" + listPath + L"\" --output \"" + outDir + L"\"";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
