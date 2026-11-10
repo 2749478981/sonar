@@ -2852,12 +2852,21 @@ function pvApply(st) {
   const bar = $('#pvBar');
   if (!bar) return;
   const playing = !!(st && st.playing);
+  const seeking = !!(st && st.seeking);
   const dur = (st && st.dur) || 0;
   const pos = (st && st.pos) || 0;
-  PV.dur = dur;
-  // 没在播就不显示：否则被打断的那条会留下"0:00 / 0:37"这种停在开头的残影
-  if (!playing) { bar.hidden = true; return; }
+  if (dur > 0) PV.dur = dur;
+  // 没在播就不显示：否则被打断的那条会留下"0:00 / 0:37"这种停在开头的残影。
+  // 例外：正在拖动跳转（seeking）时旧声部已停、新声部还在解码，这一刻必须保持可见，
+  //       否则播放条会先跳回开头、再整条消失一下（用户报过）。
+  if (!playing && !seeking && !PV.dragging) {
+    bar.hidden = true;
+    document.body.classList.remove('pvon');
+    PV.dur = 0;
+    return;
+  }
   bar.hidden = false;
+  document.body.classList.toggle('pvon', true);
   const paused = !!(st && st.paused);
   PV.paused = paused;
   const pb = $('#pvPause');
@@ -2884,7 +2893,8 @@ async function pvPoll() {
   try { st = await Backend.call('sound.previewState', {}); } catch (e) { st = null; }
   pvApply(st);
   clearTimeout(PV.timer);
-  PV.timer = setTimeout(pvPoll, (st && st.playing) ? 250 : 1200);
+  // 跳转中也要按快节奏轮询，才能第一时间接上新声部的进度
+  PV.timer = setTimeout(pvPoll, (st && (st.playing || st.seeking)) ? 250 : 1200);
 }
 
 (function pvInit() {
@@ -2900,10 +2910,13 @@ async function pvPoll() {
       if (tm) tm.textContent = pvFmt(PV.dur * sk.value / 1000) + ' / ' + pvFmt(PV.dur);
     });
     sk.addEventListener('change', async () => {
-      PV.dragging = false;
       const ms = Math.round(PV.dur * sk.value / 1000);
+      // 保持 dragging 到后端应答为止：这中间旧声部已经停了，若被当成"没在播"，
+      // 播放条会先跳回开头、再整条消失一下（用户报过）。
+      PV.dragging = true;
       try { await Backend.call('sound.previewSeek', { ms }); }
       catch (e) { toast('拖动失败：' + e.message, 'err'); }
+      PV.dragging = false;
       clearTimeout(PV.timer); pvPoll();
     });
   }
@@ -2911,6 +2924,8 @@ async function pvPoll() {
   if (sb) sb.onclick = async () => {
     try { await Backend.call('sound.previewStop', {}); } catch (e) {}
     bar.hidden = true;
+    document.body.classList.remove('pvon');
+    PV.dur = 0;
     clearTimeout(PV.timer);
     setTimeout(pvPoll, 1200);
   };
@@ -2934,6 +2949,8 @@ async function pvPoll() {
 window.__pvStop = async () => {
   try { await Backend.call('sound.previewStop', {}); } catch (e) {}
   const b = $('#pvBar'); if (b) b.hidden = true;
+  PV.dur = 0;
+  document.body.classList.remove('pvon');
 };
 
 /* ===========================================================================

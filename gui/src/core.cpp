@@ -877,6 +877,9 @@ std::atomic<int> gPvActive{ 0 };            // 正在播的声部数（"整体�
 std::atomic<int> gPvNextId{ 1 };            // 声部编号
 std::atomic<int> gPvOwnerId{ 0 };           // 正在驱动播放条的那个声部（最长的一条）
 std::atomic<bool> gPvPaused{ false };       // 暂停中（声音和进度都停住）
+// 拖动进度条期间为真：此时旧声部已停、新声部还在解码，界面要靠它保持播放条可见
+// （否则 gPvActive=0 且 dur=0，播放条会先跳回开头再整条消失一下）。
+std::atomic<bool> gPvSeeking{ false };
 std::mutex gPvDevMx;                        // 保护下面这张"正在出声的设备"表
 std::vector<HWAVEOUT> gPvDevs;              // 活着的声部设备（暂停/继续要一起处理）
 
@@ -999,6 +1002,7 @@ const bool owner = (durMs >= gPvDurMs.load(std::memory_order_relaxed));
         gPvOwnerId.store(myId, std::memory_order_relaxed);
         gPvDurMs.store(durMs, std::memory_order_relaxed);
         gPvPosMs.store(posBaseMs, std::memory_order_relaxed);
+        gPvSeeking.store(false, std::memory_order_relaxed);   // 新声部已经开始驱动播放条
     }
     // 声部计数用 RAII：下面任何一条 return 都要把它减回去，否则播放条会一直显示"在播"
     struct PvAlive {
@@ -1152,6 +1156,50 @@ static bool VgDecodeWem(const std::wstring& cli, const std::wstring& tmpDir, con
         wav.clear();
     }
     return false;
+}
+
+// ---- 解码缓存（只在本次运行内有效，重启即清空）----
+// 用户一次会话里会反复听同一批 wem：不缓存的话每点一次都要跑一遍 vgmstream，
+// 长 BGM 解一次十几秒、还要写几十上百 MB 的临时 wem。缓存的是**解码后的 wav 字节**，
+// 命中时直接进播放链。上限 1.5GB，超了整体清空重来（可预测，不做 LRU 簿记）。
+static std::mutex gPcmMx;
+static std::unordered_map<std::string, std::shared_ptr<std::vector<unsigned char>>> gPcmCache;
+static std::size_t gPcmBytes = 0;
+static const std::size_t kPcmCap = (std::size_t)1536 << 20;
+
+// FNV-1a：给 wem 内容做指纹。同一 media id 在不同 bank 里内容不同，
+// 只按 id 缓存会把别的 bank 的音频当成本条的（会放错声音）。
+static unsigned long long FnvOf(const unsigned char* p, std::size_t n) {
+    unsigned long long h = 1469598103934665603ull;
+    for (std::size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 1099511628211ull; }
+    return h;
+}
+
+static bool PcmCacheGet(const std::string& key, std::vector<unsigned char>& out) {
+    std::lock_guard<std::mutex> lk(gPcmMx);
+    const std::unordered_map<std::string, std::shared_ptr<std::vector<unsigned char>>>::iterator it =
+        gPcmCache.find(key);
+    if (it == gPcmCache.end()) return false;
+    out = *it->second;
+    return true;
+}
+
+static void PcmCachePut(const std::string& key, const std::vector<unsigned char>& wav) {
+    if (wav.empty() || wav.size() > (std::size_t)512 << 20) return;   // 单条超大不缓存
+    std::lock_guard<std::mutex> lk(gPcmMx);
+    if (gPcmBytes + wav.size() > kPcmCap) { gPcmCache.clear(); gPcmBytes = 0; }
+    const std::shared_ptr<std::vector<unsigned char>> sp =
+        std::make_shared<std::vector<unsigned char>>(wav);
+    std::pair<std::unordered_map<std::string, std::shared_ptr<std::vector<unsigned char>>>::iterator, bool> ins =
+        gPcmCache.insert(std::make_pair(key, sp));
+    if (!ins.second) { gPcmBytes -= ins.first->second->size(); ins.first->second = sp; }
+    gPcmBytes += wav.size();
+}
+
+static void PcmCacheClear() {
+    std::lock_guard<std::mutex> lk(gPcmMx);
+    gPcmCache.clear();
+    gPcmBytes = 0;
 }
 
 // 导入 nbnk / npck 失败时，把"这个文件到底长什么样"一并说出来：
@@ -2721,6 +2769,15 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
         }
         const std::wstring tmpDir = Utf8ToWide(exeDir) + L"wemkit\\tmp";
         ::CreateDirectoryW(tmpDir.c_str(), nullptr);
+        // 先查解码缓存（同一 media 反复点不用再解一次）
+        char keybuf[96] = {};
+        ::sprintf_s(keybuf, "wem:%lld:%u:%016llx", media, (unsigned)wem.size(),
+                    FnvOf(wem.data(), wem.size() < 65536 ? wem.size() : 65536));
+        std::vector<unsigned char> wav;
+        if (PcmCacheGet(keybuf, wav)) {
+            PlayPreviewBytes(std::move(wav), "media " + std::to_string(media), 1.0f);
+            return true;
+        }
         wchar_t num[32] = {};
         ::swprintf_s(num, L"%lld", media);
         const std::wstring wemFile = tmpDir + L"\\play_" + num + L".wem";
@@ -2732,8 +2789,8 @@ static unsigned long long DllWriteTimeUtc(const std::string& pluginsDir) {
             ::WriteFile(h, wem.data(), (DWORD)wem.size(), &wr0, nullptr);
             ::CloseHandle(h);
         }
-        std::vector<unsigned char> wav;
         if (VgDecodeWem(cli, tmpDir, wemFile, wav)) {
+            PcmCachePut(keybuf, wav);
             // 走统一试听链（底部播放条显示/拖动进度）
             PlayPreviewBytes(std::move(wav), "media " + std::to_string(media), 1.0f);
             return true;
@@ -4810,6 +4867,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 name = gPvName;
             }
             d.set("playing", JVal(gPvActive.load(std::memory_order_relaxed) > 0));
+            d.set("seeking", JVal(gPvSeeking.load(std::memory_order_relaxed)));
             d.set("paused", JVal(gPvPaused.load(std::memory_order_relaxed)));
             d.set("pos", JVal((int)gPvPosMs.load(std::memory_order_relaxed)));
             d.set("dur", JVal((int)gPvDurMs.load(std::memory_order_relaxed)));
@@ -4832,7 +4890,12 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 buf = gPvBuf;
             }
             if (!buf && path.empty()) return ErrJson("没有正在试听的音效");
+            // 记住拖之前的总时长：StopAllPreview 会把它清零，界面就会"跳回开头 + 消失一下"。
+            const int durKeep = (int)gPvDurMs.load(std::memory_order_relaxed);
             StopAllPreview();
+            gPvDurMs.store(durKeep, std::memory_order_relaxed);
+            gPvPosMs.store(ms, std::memory_order_relaxed);
+            gPvSeeking.store(true, std::memory_order_relaxed);
             if (buf) PlayPreviewBytes(*buf, name, gain, (unsigned)ms);
             else PlayPreviewFile(path, gain, 0, true, (unsigned)ms);
             JVal d = JVal::obj();
@@ -5382,21 +5445,27 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
 
             std::wstring tmpDir = Utf8ToWide(im->exeDir) + L"wemkit\\tmp";
             ::CreateDirectoryW(tmpDir.c_str(), nullptr);
-            wchar_t num[32] = {};
-            ::swprintf_s(num, L"%lld", media);
-            const std::wstring wemFile = tmpDir + L"\\play_" + num + L".wem";
-            {
-                HANDLE h = ::CreateFileW(wemFile.c_str(), GENERIC_WRITE, 0, nullptr,
-                                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-                if (h == INVALID_HANDLE_VALUE) return ErrJson("无法写临时 wem");
-                DWORD wr0 = 0;
-                ::WriteFile(h, wem.data(), (DWORD)wem.size(), &wr0, nullptr);
-                ::CloseHandle(h);
-            }
-
+            // 解码缓存：key 带上 wem 内容指纹，避免同 id 跨 bank 串音
+            char keybuf[96] = {};
+            ::sprintf_s(keybuf, "wem:%lld:%u:%016llx", (long long)media, (unsigned)wem.size(),
+                        FnvOf(wem.data(), wem.size() < 65536 ? wem.size() : 65536));
             std::vector<unsigned char> wav;
-            if (!VgDecodeWem(cli, tmpDir, wemFile, wav))
-                return ErrJson("wem 解码失败（vgmstream 没有输出 wav）");
+            if (!PcmCacheGet(keybuf, wav)) {
+                wchar_t num[32] = {};
+                ::swprintf_s(num, L"%lld", media);
+                const std::wstring wemFile = tmpDir + L"\\play_" + num + L".wem";
+                {
+                    HANDLE h = ::CreateFileW(wemFile.c_str(), GENERIC_WRITE, 0, nullptr,
+                                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    if (h == INVALID_HANDLE_VALUE) return ErrJson("无法写临时 wem");
+                    DWORD wr0 = 0;
+                    ::WriteFile(h, wem.data(), (DWORD)wem.size(), &wr0, nullptr);
+                    ::CloseHandle(h);
+                }
+                if (!VgDecodeWem(cli, tmpDir, wemFile, wav))
+                    return ErrJson("wem 解码失败（vgmstream 没有输出 wav）");
+                PcmCachePut(keybuf, wav);
+            }
 
             // 走统一试听链：底部播放条能显示进度、也能拖进度（不再是 PlaySound 一次播完）
             const int nbytes = (int)wav.size();
@@ -6087,8 +6156,21 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             ::CreateDirectoryW(tmpDir.c_str(), nullptr);
 
             std::vector<unsigned char> wav;
-            if (!VgDecodeWem(cli, tmpDir, src, wav))
-                return ErrJson("解码失败（格式不支持或文件损坏）");
+            // 同一个替换音效反复试听时不再重复解码：key = 路径 + 大小 + 修改时间
+            char keybuf[400] = {};
+            WIN32_FILE_ATTRIBUTE_DATA fad{};
+            const unsigned long long fsz =
+                ::GetFileAttributesExW(src.c_str(), GetFileExInfoStandard, &fad)
+                    ? (((unsigned long long)fad.nFileSizeHigh << 32) | fad.nFileSizeLow) : 0ull;
+            ::sprintf_s(keybuf, "file:%s:%llu:%llu", path.c_str(), fsz,
+                        ::GetFileAttributesExW(src.c_str(), GetFileExInfoStandard, &fad)
+                            ? (((unsigned long long)fad.ftLastWriteTime.dwHighDateTime << 32) |
+                               fad.ftLastWriteTime.dwLowDateTime) : 0ull);
+            if (!PcmCacheGet(keybuf, wav)) {
+                if (!VgDecodeWem(cli, tmpDir, src, wav))
+                    return ErrJson("解码失败（格式不支持或文件损坏）");
+                PcmCachePut(keybuf, wav);
+            }
             // 走统一试听链（底部播放条可显示/拖动进度）
             const int nbytes = (int)wav.size();
             const std::size_t cut = path.find_last_of("\\/");
