@@ -1165,7 +1165,7 @@ static bool VgDecodeWem(const std::wstring& cli, const std::wstring& tmpDir, con
 static std::mutex gPcmMx;
 static std::unordered_map<std::string, std::shared_ptr<std::vector<unsigned char>>> gPcmCache;
 static std::size_t gPcmBytes = 0;
-static const std::size_t kPcmCap = (std::size_t)1536 << 20;
+static const std::size_t kPcmCap = (std::size_t)1024 << 20;
 
 // FNV-1a：给 wem 内容做指纹。同一 media id 在不同 bank 里内容不同，
 // 只按 id 缓存会把别的 bank 的音频当成本条的（会放错声音）。

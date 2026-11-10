@@ -30,18 +30,25 @@
     });
   }
 
+  // 打开系统文件/文件夹对话框时，宿主 UI 线程被这个模态对话框占住，
+  // 期间任何请求都不会被处理。用户挑文件可能花好几分钟 —— 用 30 秒超时
+  // 就会在对话框还没关掉时先报"后端无响应"（jsErr 里真的抓到过
+  // "unhandled: 后端无响应：bank.pick"）。带 pick/browse 的方法一律放宽。
+  const DIALOG_TIMEOUT = 900000;
+
   const Backend = {
     mode: hasWebView ? 'webview2' : 'browser',
     onEvent(cb) { eventHandlers.push(cb); },
     call(method, params) {
       if (!hasWebView) return Mock.call(method, params || {});
+      const waitMs = /pick|browse/i.test(method) ? DIALOG_TIMEOUT : 30000;
       return new Promise((resolve, reject) => {
         const id = nextId++;
         pending.set(id, { resolve, reject });
         window.chrome.webview.postMessage(JSON.stringify({ id, method, params: params || {} }));
         setTimeout(() => {
           if (pending.has(id)) { pending.delete(id); reject(new Error('后端无响应：' + method)); }
-        }, 30000);
+        }, waitMs);
       });
     },
   };
