@@ -646,6 +646,27 @@ bool WriteWideFile(const std::wstring& path, const void* data, std::size_t n) {
 
 
 
+// 清空一个目录里的所有文件（不递归进子目录以外的层级，但会连同子目录一起删）。
+// 只用于 wemkit\tmp 这种纯临时目录：以前每播一条 wem 就留一份，长期会堆到 GB 级。
+void PurgeTempDir(const std::wstring& dir) {
+    WIN32_FIND_DATAW fd{};
+    const std::wstring pat = ExtendPath(dir + L"\\*");
+    HANDLE h = ::FindFirstFileW(pat.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        const wchar_t* nm = fd.cFileName;
+        if (!wcscmp(nm, L".") || !wcscmp(nm, L"..")) continue;
+        const std::wstring full = dir + L"\\" + nm;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            PurgeTempDir(full);                       // 递归清空
+            ::RemoveDirectoryW(ExtendPath(full).c_str());
+        } else {
+            ::DeleteFileW(ExtendPath(full).c_str());
+        }
+    } while (::FindNextFileW(h, &fd));
+    ::FindClose(h);
+}
+
 // 原子复制。失败时把原因写进 why（给用户看具体卡在哪一步）。
 bool CopyFileAtomicWhy(const std::wstring& src, const std::wstring& dst, std::wstring* why) {
     const std::wstring esrc = ExtendPath(src), edst = ExtendPath(dst);
@@ -1763,6 +1784,7 @@ struct Core::Impl {
         wemUserNamePath = BaseDir() + "WseWemNames_user.txt";
         LoadWemUserNames();
         ExtractEmbeddedAssets();   // 内嵌资源（图标 / logo / 成就音效）解压到 %LOCALAPPDATA%
+        PurgeTempDir(Utf8ToWide(exeDir) + L"wemkit\\tmp");   // 试听/时长探测的临时 wem 每次启动清掉
     }
 
     ~Impl() { game.Detach(); }
@@ -6185,7 +6207,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             // 分批探测（命令行长度有限，一次 64 个足够快也不会溢出）
             for (std::size_t base = 0; base < pendFile.size(); base += 64) {
                 const std::size_t end = (base + 64 < pendFile.size()) ? base + 64 : pendFile.size();
-                std::wstring cmd = L"\"" + cli + L"\" -I";
+                std::wstring cmd = L"\"" + cli + L"\" -m -I";
                 for (std::size_t k = base; k < end; ++k) cmd += L" \"" + pendFile[k] + L"\"";
                 SECURITY_ATTRIBUTES sa{};
                 sa.nLength = sizeof(sa);
