@@ -75,7 +75,8 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
                   const std::wstring& ffmpegExe,
                   const std::wstring& workDir,
                   std::vector<std::wstring>& outWems,
-                  std::string& log);
+                  std::string& log,
+                  const std::wstring& wwiseConsoleExe = std::wstring());   // 空 = 自动查找
 
 // 找 WwiseConsole.exe（优先 WWISEROOT 环境变量）
 std::wstring FindWwiseConsole();

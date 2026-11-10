@@ -378,7 +378,8 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
                   const std::wstring& ffmpegExe,
                   const std::wstring& workDir,
                   std::vector<std::wstring>& outWems,
-                  std::string& log) {
+                  std::string& log,
+                  const std::wstring& wwiseConsoleExe) {
     outWems.clear();
     if (audioFiles.empty()) { log = "没有音频文件"; return false; }
     if (!::CreateDirectoryW(workDir.c_str(), nullptr) &&
@@ -465,7 +466,11 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
     const std::wstring outDir = workDir + L"\\out";
     ::CreateDirectoryW(outDir.c_str(), nullptr);
     std::wstring cmd = L"\"" + wwiseProj + L"\"";
-    std::wstring console = FindWwiseConsole();
+    // 用户手动指定的优先（Wwise 装在别的盘/改过目录名），指定失效再退回自动查找
+    std::wstring console = wwiseConsoleExe;
+    if (!console.empty() && ::GetFileAttributesW(console.c_str()) == INVALID_FILE_ATTRIBUTES)
+        console.clear();
+    if (console.empty()) console = FindWwiseConsole();
     if (console.empty()) { log = "找不到 WwiseConsole.exe（需要装 Wwise，或设 WWISEROOT 环境变量）"; return false; }
     std::wstring full = L"\"" + console + L"\" convert-external-source \"" + wwiseProj +
                         L"\" --source-file \"" + listPath + L"\" --output \"" + outDir + L"\" --quiet";

@@ -2424,7 +2424,7 @@ async function refreshConvertEnv() {
   try {
     const r = await Backend.call('wem.convertEnv', {});
     const wwise = r.hasWwise
-      ? 'Wwise ✓（可把 wav/mp3/ogg 转成 wem）'
+      ? ('Wwise ✓（' + (r.wwisePath ? shortPath(r.wwisePath) : '可把 wav/mp3/ogg 转成 wem') + '）')
       : '未检测到 Wwise ✗ —— 只能替换「已经是 .wem」的文件；要转换其他格式需安装 Wwise（免费，Audiokinetic 官网）';
     const ff = r.hasFfmpeg
       ? ('ffmpeg ✓' + (r.ffmpegPath ? '（' + shortPath(r.ffmpegPath) + '）' : ''))
@@ -2456,6 +2456,32 @@ async function refreshConvertEnv() {
         refreshConvertEnv();
       };
       el.appendChild(auto);
+    }
+    // Wwise 同理：Wwise 装在别的盘、或目录名被改过时，自动查找会失手
+    const wpick = document.createElement('button');
+    wpick.className = 'nav';
+    wpick.style.marginLeft = '6px';
+    wpick.textContent = r.hasWwise ? '更换 WwiseConsole…' : '选择 WwiseConsole.exe…';
+    wpick.title = r.wwisePath ? ('当前：' + r.wwisePath) : '找不到 WwiseConsole.exe 时可以手动指定它的位置';
+    wpick.onclick = async () => {
+      try {
+        const pr = await Backend.call('wwise.pick', {});
+        if (pr.cancelled) return;
+        toast('已指定 Wwise：' + shortPath(pr.path), 'ok');
+        refreshConvertEnv();
+      } catch (e) { toast('指定失败：' + e.message, 'err'); }
+    };
+    el.appendChild(wpick);
+    if (r.wwiseManual) {
+      const wauto = document.createElement('button');
+      wauto.className = 'nav';
+      wauto.style.marginLeft = '6px';
+      wauto.textContent = 'Wwise 改回自动查找';
+      wauto.onclick = async () => {
+        try { await Backend.call('wwise.clear', {}); } catch (e) {}
+        refreshConvertEnv();
+      };
+      el.appendChild(wauto);
     }
     // ★ 缺 ffmpeg 时给一键下载（约 80MB，静态单文件版，不需要额外 DLL）
     if (!r.hasFfmpeg) {

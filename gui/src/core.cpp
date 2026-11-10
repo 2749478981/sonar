@@ -731,6 +731,17 @@ static std::wstring FindFfmpegExe(const std::string& exeDirUtf8, const std::stri
     return std::wstring();
 }
 
+// WwiseConsole.exe：先看用户手动指定的，再退回自动查找（WWISEROOT / 扫所有固定盘）。
+// 手动指定的文件被删了也不要紧 —— 自动退回，不会因为一个过期设置就一直报"找不到"。
+static std::wstring FindWwiseConsoleEx(const std::string& configuredUtf8) {
+    const std::string cfg = Trim(configuredUtf8);
+    if (!cfg.empty()) {
+        const std::wstring w = Utf8ToWide(cfg);
+        if (::GetFileAttributesW(ExtendPath(w).c_str()) != INVALID_FILE_ATTRIBUTES) return w;
+    }
+    return bankmod::FindWwiseConsole();
+}
+
 // 原子复制。失败时把原因写进 why（给用户看具体卡在哪一步）。
 bool CopyFileAtomicWhy(const std::wstring& src, const std::wstring& dst, std::wstring* why) {
     const std::wstring esrc = ExtendPath(src), edst = ExtendPath(dst);
@@ -1312,6 +1323,7 @@ struct UiPrefs {
     bool wemView = false;      // 捕获面板视图：false=派生 fsm，true=WEM 音效
     std::string playerPath;    // 试听用的播放器（如 foobar2000 + vgmstream）
     std::string ffmpegPath;    // 用户手动指定的 ffmpeg.exe（空 = 自动查找）
+    std::string wwisePath;     // 用户手动指定的 WwiseConsole.exe（空 = 自动查找）
 
     UiPrefs() {
         colWidths.set("name", JVal(180));
@@ -2012,6 +2024,7 @@ struct Core::Impl {
                                  //   （以前记住 WEM 视图，导致用户以为派生捕获"不见了"）
         prefs.playerPath = v.optStr("playerPath");
         prefs.ffmpegPath = v.optStr("ffmpegPath");
+        prefs.wwisePath = v.optStr("wwisePath");
     }
 
     void SaveUiPrefs() {
@@ -2026,6 +2039,7 @@ struct Core::Impl {
         v.set("wemView", JVal(prefs.wemView));
         v.set("playerPath", JVal(prefs.playerPath));
         v.set("ffmpegPath", JVal(prefs.ffmpegPath));
+        v.set("wwisePath", JVal(prefs.wwisePath));
         FsWrite(uiPath, JsonDump(v));
         uiDirty = false;
     }
@@ -2042,6 +2056,7 @@ struct Core::Impl {
         v.set("wemView", JVal(prefs.wemView));
         v.set("playerPath", JVal(prefs.playerPath));
         v.set("ffmpegPath", JVal(prefs.ffmpegPath));
+        v.set("wwisePath", JVal(prefs.wwisePath));
         return v;
     }
 
@@ -6518,7 +6533,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
 
         if (method == "wem.convertEnv") {
             // 转换环境自检：给界面显示"能不能转 wem"
-            const std::wstring wwise = bankmod::FindWwiseConsole();
+            const std::wstring wwise = FindWwiseConsoleEx(im->prefs.wwisePath);
             const std::wstring ff = FindFfmpegExe(im->exeDir, im->prefs.ffmpegPath);
             const bool hasFf = !ff.empty();
             std::wstring vg = Utf8ToWide(im->exeDir) + L"wemkit\\vgmstream\\vgmstream-cli.exe";
@@ -6529,6 +6544,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             d.set("hasFfmpeg", JVal(hasFf));
             d.set("ffmpegPath", JVal(Utf8FromWide(ff)));
             d.set("ffmpegManual", JVal(!im->prefs.ffmpegPath.empty()));
+            d.set("wwiseManual", JVal(!im->prefs.wwisePath.empty()));
             d.set("hasVgmstream", JVal(hasVg));
             return OkJson(d);
         }
@@ -6549,7 +6565,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             std::wstring work = Utf8ToWide(im->exeDir) + L"wemkit\\tmp";
             std::vector<std::wstring> wems;
             std::string log;
-            if (!bankmod::ConvertToWem(files, proj, ff, work, wems, log)) return ErrJson(log);
+            const std::wstring ww = FindWwiseConsoleEx(im->prefs.wwisePath);
+            if (!bankmod::ConvertToWem(files, proj, ff, work, wems, log, ww)) return ErrJson(log);
             JVal arr = JVal::arr();
             for (const std::wstring& w : wems) arr.push(JVal(Utf8FromWide(w)));
             JVal d = JVal::obj();
@@ -6736,6 +6753,35 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             im->prefs.ffmpegPath.clear();
             im->SaveUiPrefs();
             const std::wstring found = FindFfmpegExe(im->exeDir, im->prefs.ffmpegPath);
+            JVal d = JVal::obj();
+            d.set("path", JVal(Utf8FromWide(found)));
+            return OkJson(d);
+        }
+
+        // 手动指定 WwiseConsole.exe（Wwise 装在别的盘/改过目录名时用）
+        if (method == "wwise.pick") {
+            std::vector<std::string> none;
+            const std::string pick = OpenFileDialog(OwnerOf(owner),
+                L"WwiseConsole (WwiseConsole.exe)\0WwiseConsole.exe\0可执行文件 (*.exe)\0*.exe\0所有文件 (*.*)\0*.*\0",
+                nullptr, L"exe", false, none);
+            JVal d = JVal::obj();
+            if (pick.empty()) { d.set("cancelled", JVal(true)); return OkJson(d); }
+            std::size_t ps = pick.find_last_of("\\/");
+            const std::string base = (ps == std::string::npos) ? pick : pick.substr(ps + 1);
+            std::string low = base;
+            for (char& c : low) c = (char)::tolower((unsigned char)c);
+            if (low != "wwiseconsole.exe")
+                return ErrJson("请选择 WwiseConsole.exe 本身（不是 Wwise.exe 或别的工具）");
+            im->prefs.wwisePath = pick;
+            im->SaveUiPrefs();
+            d.set("cancelled", JVal(false));
+            d.set("path", JVal(pick));
+            return OkJson(d);
+        }
+        if (method == "wwise.clear") {
+            im->prefs.wwisePath.clear();
+            im->SaveUiPrefs();
+            const std::wstring found = FindWwiseConsoleEx(im->prefs.wwisePath);
             JVal d = JVal::obj();
             d.set("path", JVal(Utf8FromWide(found)));
             return OkJson(d);
