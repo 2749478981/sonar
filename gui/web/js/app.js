@@ -2412,6 +2412,12 @@ ACTIONS['win.bank'] = () => {
 };
 
 // 转换环境自检（有没有 Wwise / ffmpeg / vgmstream）
+function shortPath(p) {
+  const s = String(p || '');
+  const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
 async function refreshConvertEnv() {
   const el = $('#bankEnv');
   if (!el) return;
@@ -2420,9 +2426,37 @@ async function refreshConvertEnv() {
     const wwise = r.hasWwise
       ? 'Wwise ✓（可把 wav/mp3/ogg 转成 wem）'
       : '未检测到 Wwise ✗ —— 只能替换「已经是 .wem」的文件；要转换其他格式需安装 Wwise（免费，Audiokinetic 官网）';
-    const ff = r.hasFfmpeg ? 'ffmpeg ✓' : 'ffmpeg ✗（mp3/ogg 转换需要）';
+    const ff = r.hasFfmpeg
+      ? ('ffmpeg ✓' + (r.ffmpegPath ? '（' + shortPath(r.ffmpegPath) + '）' : ''))
+      : 'ffmpeg ✗（mp3/ogg 转换需要）';
     const vg = r.hasVgmstream ? '试听解码 ✓' : '试听解码 ✗（缺 wemkit\\vgmstream）';
     el.textContent = '转换环境：' + wwise + '　|　' + ff + '　|　' + vg;
+    // 手动指定 ffmpeg：装了却放在别处（或以前版本装过）时用；自动查找后端已经做了
+    const pick = document.createElement('button');
+    pick.className = 'nav';
+    pick.style.marginLeft = '8px';
+    pick.textContent = r.hasFfmpeg ? '更换 ffmpeg…' : '选择 ffmpeg.exe…';
+    pick.title = r.ffmpegPath ? ('当前：' + r.ffmpegPath) : '找不到 ffmpeg 时可以手动指定 ffmpeg.exe 的位置';
+    pick.onclick = async () => {
+      try {
+        const pr = await Backend.call('ffmpeg.pick', {});
+        if (pr.cancelled) return;
+        toast('已指定 ffmpeg：' + shortPath(pr.path), 'ok');
+        refreshConvertEnv();
+      } catch (e) { toast('指定失败：' + e.message, 'err'); }
+    };
+    el.appendChild(pick);
+    if (r.ffmpegManual) {
+      const auto = document.createElement('button');
+      auto.className = 'nav';
+      auto.style.marginLeft = '6px';
+      auto.textContent = '改回自动查找';
+      auto.onclick = async () => {
+        try { await Backend.call('ffmpeg.clear', {}); } catch (e) {}
+        refreshConvertEnv();
+      };
+      el.appendChild(auto);
+    }
     // ★ 缺 ffmpeg 时给一键下载（约 80MB，静态单文件版，不需要额外 DLL）
     if (!r.hasFfmpeg) {
       const st = await Backend.call('ffmpeg.status', {});

@@ -667,6 +667,70 @@ void PurgeTempDir(const std::wstring& dir) {
     ::FindClose(h);
 }
 
+// 找 ffmpeg.exe。用户把 ffmpeg 装在别处、或老版本把它放在 sonar-2.39.x\tools\... 时
+// 以前一律报"需要 ffmpeg.exe"，明明装了却用不了（用户实测踩到）。
+// 顺序：用户指定 → 数据目录 wemkit\ffmpeg.exe → 数据目录 tools\sound2wem\ffmpeg\bin →
+//       同级 sonar-* 安装目录（老版本留下的）→ PATH。
+static bool FileExistsW(const std::wstring& p) {
+    return !p.empty() && ::GetFileAttributesW(ExtendPath(p).c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+static std::wstring FindFfmpegExe(const std::string& exeDirUtf8, const std::string& configuredUtf8) {
+    if (!configuredUtf8.empty()) {
+        const std::wstring c = Utf8ToWide(configuredUtf8);
+        if (FileExistsW(c)) return c;
+    }
+    const std::wstring dir = Utf8ToWide(exeDirUtf8);
+    const std::wstring cands[] = {
+        dir + L"wemkit\\ffmpeg.exe",
+        dir + L"tools\\sound2wem\\ffmpeg\\bin\\ffmpeg.exe",
+        dir + L"ffmpeg.exe",
+    };
+    for (const std::wstring& c : cands) if (FileExistsW(c)) return c;
+
+    // 同级目录（plugins\ 下别的 sonar-* 安装）里找一份 —— 老版本装过 ffmpeg 就能直接复用
+    std::wstring parent = dir;
+    while (!parent.empty() && parent.back() == L'\\') parent.pop_back();
+    const std::size_t bs = parent.find_last_of(L"\\/");
+    if (bs != std::wstring::npos) {
+        const std::wstring root = parent.substr(0, bs);
+        WIN32_FIND_DATAW fd{};
+        HANDLE h = ::FindFirstFileW(ExtendPath(root + L"\\*").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+                if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
+                const std::wstring base = root + L"\\" + fd.cFileName;
+                const std::wstring sub1 = base + L"\\tools\\sound2wem\\ffmpeg\\bin\\ffmpeg.exe";
+                if (FileExistsW(sub1)) { ::FindClose(h); return sub1; }
+                const std::wstring sub2 = base + L"\\wemkit\\ffmpeg.exe";
+                if (FileExistsW(sub2)) { ::FindClose(h); return sub2; }
+                // 再下一层（sonar-2.39.2\sonar-2.39.2\tools\...）
+                WIN32_FIND_DATAW fd2{};
+                HANDLE h2 = ::FindFirstFileW(ExtendPath(base + L"\\*").c_str(), &fd2);
+                if (h2 != INVALID_HANDLE_VALUE) {
+                    do {
+                        if (!(fd2.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+                        if (!wcscmp(fd2.cFileName, L".") || !wcscmp(fd2.cFileName, L"..")) continue;
+                        const std::wstring base2 = base + L"\\" + fd2.cFileName;
+                        const std::wstring s3 = base2 + L"\\tools\\sound2wem\\ffmpeg\\bin\\ffmpeg.exe";
+                        if (FileExistsW(s3)) { ::FindClose(h2); ::FindClose(h); return s3; }
+                        const std::wstring s4 = base2 + L"\\wemkit\\ffmpeg.exe";
+                        if (FileExistsW(s4)) { ::FindClose(h2); ::FindClose(h); return s4; }
+                    } while (::FindNextFileW(h2, &fd2));
+                    ::FindClose(h2);
+                }
+            } while (::FindNextFileW(h, &fd));
+            ::FindClose(h);
+        }
+    }
+
+    // PATH（装了 ffmpeg 并加进环境变量的用户）
+    wchar_t buf[MAX_PATH * 2] = {};
+    if (::SearchPathW(nullptr, L"ffmpeg.exe", nullptr, MAX_PATH * 2, buf, nullptr) > 0) return buf;
+    return std::wstring();
+}
+
 // 原子复制。失败时把原因写进 why（给用户看具体卡在哪一步）。
 bool CopyFileAtomicWhy(const std::wstring& src, const std::wstring& dst, std::wstring* why) {
     const std::wstring esrc = ExtendPath(src), edst = ExtendPath(dst);
@@ -1247,6 +1311,7 @@ struct UiPrefs {
     bool onlyActive = false;   // 列表默认只看当前激活组合的条目
     bool wemView = false;      // 捕获面板视图：false=派生 fsm，true=WEM 音效
     std::string playerPath;    // 试听用的播放器（如 foobar2000 + vgmstream）
+    std::string ffmpegPath;    // 用户手动指定的 ffmpeg.exe（空 = 自动查找）
 
     UiPrefs() {
         colWidths.set("name", JVal(180));
@@ -1946,6 +2011,7 @@ struct Core::Impl {
         prefs.wemView = false;   // ★ 不持久化：每次启动都回到「派生捕获」视图
                                  //   （以前记住 WEM 视图，导致用户以为派生捕获"不见了"）
         prefs.playerPath = v.optStr("playerPath");
+        prefs.ffmpegPath = v.optStr("ffmpegPath");
     }
 
     void SaveUiPrefs() {
@@ -1959,6 +2025,7 @@ struct Core::Impl {
         v.set("onlyActive", JVal(prefs.onlyActive));
         v.set("wemView", JVal(prefs.wemView));
         v.set("playerPath", JVal(prefs.playerPath));
+        v.set("ffmpegPath", JVal(prefs.ffmpegPath));
         FsWrite(uiPath, JsonDump(v));
         uiDirty = false;
     }
@@ -1974,6 +2041,7 @@ struct Core::Impl {
         v.set("onlyActive", JVal(prefs.onlyActive));
         v.set("wemView", JVal(prefs.wemView));
         v.set("playerPath", JVal(prefs.playerPath));
+        v.set("ffmpegPath", JVal(prefs.ffmpegPath));
         return v;
     }
 
@@ -6451,14 +6519,16 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
         if (method == "wem.convertEnv") {
             // 转换环境自检：给界面显示"能不能转 wem"
             const std::wstring wwise = bankmod::FindWwiseConsole();
-            std::wstring ff = Utf8ToWide(im->exeDir) + L"wemkit\\ffmpeg.exe";
-            const bool hasFf = ::GetFileAttributesW(ff.c_str()) != INVALID_FILE_ATTRIBUTES;
+            const std::wstring ff = FindFfmpegExe(im->exeDir, im->prefs.ffmpegPath);
+            const bool hasFf = !ff.empty();
             std::wstring vg = Utf8ToWide(im->exeDir) + L"wemkit\\vgmstream\\vgmstream-cli.exe";
             const bool hasVg = ::GetFileAttributesW(vg.c_str()) != INVALID_FILE_ATTRIBUTES;
             JVal d = JVal::obj();
             d.set("hasWwise", JVal(!wwise.empty()));
             d.set("wwisePath", JVal(Utf8FromWide(wwise)));
             d.set("hasFfmpeg", JVal(hasFf));
+            d.set("ffmpegPath", JVal(Utf8FromWide(ff)));
+            d.set("ffmpegManual", JVal(!im->prefs.ffmpegPath.empty()));
             d.set("hasVgmstream", JVal(hasVg));
             return OkJson(d);
         }
@@ -6474,9 +6544,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             std::wstring proj = Utf8ToWide(im->exeDir) + L"wemkit\\wavtowemscript\\wavtowemscript.wproj";
             if (::GetFileAttributesW(proj.c_str()) == INVALID_FILE_ATTRIBUTES)
                 return ErrJson("缺少 wemkit 工程（wemkit\\wavtowemscript\\wavtowemscript.wproj）");
-            // ffmpeg：wemkit\ffmpeg.exe → PATH（仅非 wav 输入才需要）
-            std::wstring ff = Utf8ToWide(im->exeDir) + L"wemkit\\ffmpeg.exe";
-            if (::GetFileAttributesW(ff.c_str()) == INVALID_FILE_ATTRIBUTES) ff.clear();
+            // ffmpeg：用户指定 → wemkit\ffmpeg.exe → tools\sound2wem\... → 同级旧安装 → PATH
+            const std::wstring ff = FindFfmpegExe(im->exeDir, im->prefs.ffmpegPath);
             std::wstring work = Utf8ToWide(im->exeDir) + L"wemkit\\tmp";
             std::vector<std::wstring> wems;
             std::string log;
@@ -6640,6 +6709,35 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             d.set("state", JVal(gFfmpegState.load()));
             d.set("progress", JVal(gFfmpegProgress.load()));
             { std::lock_guard<std::mutex> lk(gFfmpegMx); d.set("error", JVal(gFfmpegErr)); }
+            return OkJson(d);
+        }
+
+        // 手动指定 ffmpeg.exe（自动查找找不到时用；例如用户把它装在别处）
+        if (method == "ffmpeg.pick") {
+            std::vector<std::string> none;
+            const std::string pick = OpenFileDialog(OwnerOf(owner),
+                L"ffmpeg (ffmpeg.exe)\0ffmpeg.exe\0可执行文件 (*.exe)\0*.exe\0所有文件 (*.*)\0*.*\0",
+                nullptr, L"exe", false, none);
+            JVal d = JVal::obj();
+            if (pick.empty()) { d.set("cancelled", JVal(true)); return OkJson(d); }
+            // 用户可能选到 bin 目录里的别的 exe：只接受 ffmpeg.exe，避免后面转码全失败
+            std::size_t ps = pick.find_last_of("\\/");
+            const std::string base = (ps == std::string::npos) ? pick : pick.substr(ps + 1);
+            std::string low = base;
+            for (char& c : low) c = (char)::tolower((unsigned char)c);
+            if (low != "ffmpeg.exe") return ErrJson("请选择 ffmpeg.exe 本身（不是 ffplay/ffprobe）");
+            im->prefs.ffmpegPath = pick;
+            im->SaveUiPrefs();
+            d.set("cancelled", JVal(false));
+            d.set("path", JVal(pick));
+            return OkJson(d);
+        }
+        if (method == "ffmpeg.clear") {
+            im->prefs.ffmpegPath.clear();
+            im->SaveUiPrefs();
+            const std::wstring found = FindFfmpegExe(im->exeDir, im->prefs.ffmpegPath);
+            JVal d = JVal::obj();
+            d.set("path", JVal(Utf8FromWide(found)));
             return OkJson(d);
         }
 

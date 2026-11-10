@@ -413,7 +413,8 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
         } else {
             if (ffmpegExe.empty() || ::GetFileAttributesW(ffmpegExe.c_str()) == INVALID_FILE_ATTRIBUTES) {
                 log = "需要 ffmpeg.exe 才能转换 " + ToUtf8(src) +
-                      "（把 ffmpeg.exe 放到 tools\\sound2wem\\ffmpeg\\bin\\，或在设置里指定）";
+                      "（点「音效包制作」页里的「选择 ffmpeg.exe…」指定它的位置；"
+                      "或把 ffmpeg.exe 放到 wemkit\\ 目录下）";
                 return false;
             }
             std::wstring cmd = L"\"" + ffmpegExe + L"\" -hide_banner -loglevel error -y -i \"" + src +

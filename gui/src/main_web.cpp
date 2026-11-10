@@ -1047,6 +1047,8 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         LogLine("wemdiag: %s", g_core.Handle("wem.diag", "{}").c_str());
         // 内嵌资源解压结果：排查"左上角没 logo / 武器图标空白"（典型是中文用户名）
         LogLine("assetsdiag: %s", g_core.Handle("assets.diag", "{}").c_str());
+        // 转换环境（ffmpeg / Wwise / vgmstream）：用户"明明装了 ffmpeg 却报找不到"时看这一行
+        LogLine("convertenv: %s", g_core.Handle("wem.convertEnv", "{}").c_str());
     }
     ::ShowWindow(hwnd, SW_SHOW);
     ::UpdateWindow(hwnd);
