@@ -1539,6 +1539,7 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     v.set("prevLmt", JVal(e.prevLmt));
     v.set("chargeLevel", JVal(e.chargeLevel));
     v.set("chargeCut", JVal(e.chargeCut));
+    v.set("gaugeRise", JVal(e.gaugeRise));
 
     JVal lmt = JVal::arr();
     for (std::size_t i = 0; i < e.lmt.size(); ++i) lmt.push(JVal(e.lmt[i]));
@@ -1593,6 +1594,8 @@ SoundEntry EntryFromJson(const JVal& v, const std::vector<std::string>& allowedC
     e.chargeLevel = v.optInt("chargeLevel", 0);
     if (e.chargeLevel < 0 || e.chargeLevel > 3) e.chargeLevel = 0;
     e.chargeCut = v.optBool("chargeCut", false);
+    e.gaugeRise = v.optInt("gaugeRise", 0);
+    if (e.gaugeRise < 0 || e.gaugeRise > 3) e.gaugeRise = 0;
     e.fsmId = v.optInt("fsmId", -1);
     e.fsmTarget = v.optInt("fsmTarget", -1);
     e.media = (long long)v.optInt("media", -1);   // wem/media id；id < 2^31
@@ -4490,6 +4493,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 // ★ 蓄力条目必须按「蓄力段 + 是否被打断」分开：LMT 都是"不限"时，
                 //   1/2/3 段若不进键，合并会把它们并成一条、检查又会误报"重复条件"。
                 k += "|c" + std::to_string(e.chargeLevel) + (e.chargeCut ? "x" : "-");
+                // ★ 刃级升段条目同理：白/黄/红刃各是一条，不能并成一条
+                k += "|r" + std::to_string(e.gaugeRise);
                 // Stop 与普通条目语义不同；Group 不同则"整招只响一次"的范围也不同，都不能并
                 k += std::string("|s") + (e.stop ? "1" : "0") + "|g" + e.group;
                 return k;
@@ -4509,8 +4514,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
                 const SoundEntry& e = im->cfg.entries[i];
                 if (e.weaponType != w || e.combo != combo) { out.push_back(e); continue; }
-                // ★ 蓄力条目不参与合并：它们按"蓄力段"分，本来就不是同条件的一条。
-                if (e.chargeLevel > 0) { out.push_back(e); continue; }
+                // ★ 蓄力条目 / 刃级升段条目不参与合并：它们按"段"分，本来就不是同条件的一条。
+                if (e.chargeLevel > 0 || e.gaugeRise > 0) { out.push_back(e); continue; }
                 const std::string k = keyOf(e);
                 std::unordered_map<std::string, std::size_t>::iterator it = firstIdx.find(k);
                 if (it == firstIdx.end()) { firstIdx[k] = out.size(); out.push_back(e); continue; }
@@ -4557,6 +4562,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 // ★ 蓄力条目必须按「蓄力段 + 是否被打断」分开：LMT 都是"不限"时，
                 //   1/2/3 段若不进键，合并会把它们并成一条、检查又会误报"重复条件"。
                 k += "|c" + std::to_string(e.chargeLevel) + (e.chargeCut ? "x" : "-");
+                // ★ 刃级升段条目同理：白/黄/红刃各是一条，不能并成一条
+                k += "|r" + std::to_string(e.gaugeRise);
                 // Stop 与普通条目语义不同；Group 不同则"整招只响一次"的范围也不同，都不能并
                 k += std::string("|s") + (e.stop ? "1" : "0") + "|g" + e.group;
                 return k;
@@ -4564,7 +4571,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
                 const SoundEntry& e = im->cfg.entries[i];
                 if (w >= 0 && e.weaponType != w) continue;
-                if (e.chargeLevel > 0) continue;   // 蓄力条目按段分，不算"重复触发条件"
+                if (e.chargeLevel > 0 || e.gaugeRise > 0) continue;   // 蓄力/升刃条目按段分，不算"重复触发条件"
                 ++cnt[keyOf(e)];
             }
             int dupCond = 0, noSound = 0, missing = 0, matchAll = 0;

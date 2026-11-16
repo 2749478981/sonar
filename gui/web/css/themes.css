@@ -10,9 +10,9 @@
    =========================================================================== */
 [data-theme="pro-dark"]{
   --reload-bg:#12301f; --reload-bg-hover:#173d28; --reload-fg:#7fdcae; --reload-bd:#1f5236;
-  --bg:#0d1117; --bg-layer:none;
-  --panel:#161b22; --panel-2:#1c2128;
-  --line:#21262d; --line-2:#30363d;
+  --bg:#0b0b0a; --bg-layer:none;
+  --panel:#151515; --panel-2:#1a1a19;
+  --line:#232322; --line-2:#2e2e2c;
   --text:#e6edf3; --muted:#8b949e; --dim:#6e7681;
   --accent:#2f81f7; --on-accent:#ffffff;
   --c-blue:#2f81f7; --c-green:#3fb950; --c-amber:#d29922; --c-red:#f85149; --c-purple:#a371f7;
@@ -21,17 +21,19 @@
   --chip-bg:#e6edf3; --chip-border:#30363d;
   --chip-fg:#1d1d1f;   /* 浅底片上的深色字（黑线稿图标那种主题专用） */
 
-  --bw:1px; --radius:10px; --radius-ctl:6px;
-  --shadow-card:none; --shadow-ctl:none;
-  --shadow-ctl-hover:inset 0 0 0 1px var(--line-2);
+  --bw:0; --radius:10px; --radius-ctl:6px;
+  /* 去边框靠"微明度分层"：面板比底色亮一点 + 极淡的内描边，不用实线边框 */
+  --shadow-card:inset 0 0 0 1px rgba(255,255,255,.04), 0 1px 2px rgba(0,0,0,.35);
+  --shadow-ctl:inset 0 0 0 1px rgba(255,255,255,.06);
+  --shadow-ctl-hover:inset 0 0 0 1px rgba(255,255,255,.14);
   --lift:0; --press:none;
 
-  --fs:12.5px; --fw:500; --fw-strong:600; --fw-btn:600;
+  --fs:12.5px; --fw:350; --fw-strong:600; --fw-btn:500;
 
-  --table-head-bg:#161b22; --row-bg:transparent; --row-hover:#1c2128;
-  --row-sel-bg:#1f6feb33; --row-line:#21262d;
-  --input-bg:#0d1117; --input-focus-bg:#0d1117;
-  --btn-bg:#21262d;
+  --table-head-bg:#151515; --row-bg:transparent; --row-hover:#20201e;
+  --row-sel-bg:#1f6feb33; --row-line:#232322;
+  --input-bg:#0b0b0a; --input-focus-bg:#0b0b0a;
+  --btn-bg:#1a1a19;
   --badge-bg:#a371f733; --badge-fg:#c9a9ff;
 }
 [data-theme="pro-dark"] input[type=range]{background:linear-gradient(90deg,var(--accent) 50%, var(--line-2) 50%)}
@@ -44,24 +46,26 @@
    特点：最清爽、白天看舒服、和原版配色延续
    =========================================================================== */
 [data-theme="clean-light"]{
-  --bg:#f6f7f9; --bg-layer:none;
-  --panel:#ffffff; --panel-2:#fbfbfd;
-  --line:#e6e8ec; --line-2:#d8dbe2;
+  --bg:#f5f5f3; --bg-layer:none;
+  --panel:#fcfcfb; --panel-2:#f7f7f5;
+  --line:#e7e7e3; --line-2:#dcdcd7;
   --text:#1d1d1f; --muted:#6e6e73; --dim:#a1a1a6;
   --accent:#0a84ff; --on-accent:#ffffff;
   --c-blue:#0a84ff; --c-green:#34c759; --c-amber:#ff9f0a; --c-red:#ff3b30; --c-purple:#af52de;
   --chip-bg:linear-gradient(150deg,#f7f8fa,#e9ecf2); --chip-border:#e6e8ec;
 
-  --bw:1px; --radius:12px; --radius-ctl:8px;
-  --shadow-card:0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05);
-  --shadow-ctl:none; --shadow-ctl-hover:0 2px 8px rgba(0,0,0,.10);
+  --bw:0; --radius:12px; --radius-ctl:8px;
+  /* 无实线边框：靠"面板比底色亮一点 + 极淡投影"分层（同 pro-dark） */
+  --shadow-card:0 1px 1px rgba(0,0,0,.03), 0 6px 18px rgba(0,0,0,.05);
+  --shadow-ctl:0 0 0 1px rgba(0,0,0,.045), 0 1px 2px rgba(0,0,0,.05);
+  --shadow-ctl-hover:0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent), 0 3px 10px rgba(0,0,0,.09);
   --lift:-1px; --press:none;
 
   --fs:13px; --fw:400; --fw-strong:600; --fw-btn:600;
-  --table-head-bg:#ffffff; --row-bg:transparent; --row-hover:#fafbfc;
-  --row-sel-bg:#e8f2ff; --row-line:#f0f1f4;
-  --input-bg:#f6f7f9; --input-focus-bg:#ffffff;
-  --btn-bg:#ffffff;
+  --table-head-bg:#fcfcfb; --row-bg:transparent; --row-hover:#fafaf8;
+  --row-sel-bg:#e8f0fd; --row-line:#eeece8;
+  --input-bg:#f3f3f0; --input-focus-bg:#fcfcfb;
+  --btn-bg:#fcfcfb;
   --badge-bg:#f3e8ff; --badge-fg:#af52de;
 }
 [data-theme="clean-light"] button.amber{color:#4a2f00}

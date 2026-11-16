@@ -51,6 +51,10 @@ struct SoundEntry {
     //   同一段可以在不同招式/过渡里配不同音效（派生进度细分）。0 = 普通条目。
     int chargeLevel = 0;
     bool chargeCut = false;     // ChargeCut=1：本段响时先停掉上一段蓄力音效
+    // ★ 刃级升段条目（GaugeRise=1/2/3）：太刀刃级升到该级的瞬间触发
+    //   （1=白刃 2=黄刃 3=红刃）。不看 FSM/LMT —— 升刃那一下在哪一招不固定，
+    //   所以"开红刃放 BGM"只要一条。0 = 普通条目。
+    int gaugeRise = 0;
     PoolSpec def;               // 默认音效（Sound=）；启用判定时它是"都不成立"的兜底池
     PoolSpec gauge[4];          // 刃时音效 0..3（无/白/黄/红；Sound:none|white|yellow|red）
     PoolSpec charge[4];         // 蓄力等级音效 0..3（大剑/弓/锤；Sound:charge0..3，1=蓄力1段…3=蓄满）

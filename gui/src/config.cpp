@@ -372,6 +372,9 @@ bool LoadConfig(const std::string& path, Config& cfg) {
             cur.chargeLevel = (cl >= 1 && cl <= 3) ? cl : 0;
         } else if (key == "ChargeCut") {
             cur.chargeCut = std::atoi(val.c_str()) != 0;
+        } else if (key == "GaugeRise") {
+            const int gr = std::atoi(val.c_str());
+            cur.gaugeRise = (gr >= 1 && gr <= 3) ? gr : 0;
         } else if (key == "CheckDelayMs") {
             cur.checkDelayMs = std::atoi(val.c_str());
         } else if (key == "CheckTimeoutMs") {
@@ -482,6 +485,7 @@ static void WriteEntry(const SoundEntry& e, int n, std::string& o) {
     if (e.prevLmt >= 0) o += "PrevLmt=" + std::to_string(e.prevLmt) + "\r\n";
     if (e.chargeLevel > 0) o += "ChargeLevel=" + std::to_string(e.chargeLevel) + "\r\n";
     if (e.chargeCut) o += "ChargeCut=1\r\n";
+    if (e.gaugeRise > 0) o += "GaugeRise=" + std::to_string(e.gaugeRise) + "\r\n";
     o += "WeaponType=" + std::to_string(e.weaponType) + "\r\n";
     o += LmtLine(e) + "\r\n";
     o += "FSMId=" + std::to_string(e.fsmId) + "\r\n";

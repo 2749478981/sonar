@@ -6,8 +6,8 @@
 <title>Sonar 配置工具</title>
   <!-- 浮窗页面（#overlay）：必须在首屏渲染前同步打上标记，否则会先闪一下完整界面 -->
   <script>if (location.hash === '#overlay') document.documentElement.className = 'overlay-mode';</script>
-<link rel="stylesheet" href="css/base.css?v=2.39.5">
-<link rel="stylesheet" href="css/themes.css?v=2.39.5">
+<link rel="stylesheet" href="css/base.css?v=2.39.6-dev2">
+<link rel="stylesheet" href="css/themes.css?v=2.39.6-dev2">
 </head>
 <body>
 <!-- 主题装饰层（可爱风显示爪印，其它主题为空） -->
@@ -250,11 +250,28 @@
       <label class="inline" title="取消勾选 = 临时停用这条（配置保留，游戏里不触发）。想单独听某一条时，把别的先停掉即可"><input type="checkbox" id="edEnabled" checked> 启用</label></div>
     <div class="field"><span>武器</span><select id="edWeapon"></select></div>
     <div class="field"><span>组合</span><select id="edCombo"></select></div>
+
+    <!-- 触发方式：动作命中（默认，按 FSM/LMT） / 刃级升段（太刀专用，不看动作） -->
+    <div class="field" id="edTrigRow"><span>触发方式</span>
+      <select id="edTrigMode">
+        <option value="action">动作命中（按 FSM / LMT）</option>
+        <option value="gauge">刃级升到…（太刀，不看动作）</option>
+      </select>
+      <select id="edGaugeRise" hidden>
+        <option value="1">白刃</option>
+        <option value="2">黄刃</option>
+        <option value="3">红刃</option>
+      </select>
+    </div>
+    <div class="field hint" id="edTrigHint" hidden>
+      刃级升到该颜色的<b>那一瞬间</b>播放一次；掉刃或换区后重新计。不看 FSM / LMT —— 升刃时正在打哪一招并不固定。
+    </div>
+
     <div class="field" id="edRowFsm"><span>FSMId</span>
       <input type="number" id="edFsm" class="num" title="-1 = 不限">
       <label class="inline"><input type="checkbox" id="edLmtAny"> LMT 不限</label>
     </div>
-    <div class="field"><span>LMT</span><input type="text" id="edLmt" placeholder="如 49265（多个用逗号分隔 = 命中任一即可；空或 -1 = 不限）"></div>
+    <div class="field" id="edRowLmt"><span>LMT</span><input type="text" id="edLmt" placeholder="如 49265（多个用逗号分隔 = 命中任一即可；空或 -1 = 不限）"></div>
     <div class="field hint" id="edLmtHint"></div>
 
     <!-- 蓄力条目：只对大剑开放。不属于"高级设置"，因为它是一种条目类型 -->
@@ -561,8 +578,8 @@
 
 <div class="toasts" id="toasts"></div>
 
-<script src="js/mock.js?v=2.39.5"></script>
-<script src="js/app.js?v=2.39.5"></script>
-<script src="js/capture.js?v=2.39.5"></script>
+<script src="js/mock.js?v=2.39.6-dev2"></script>
+<script src="js/app.js?v=2.39.6-dev2"></script>
+<script src="js/capture.js?v=2.39.6-dev2"></script>
 </body>
 </html>

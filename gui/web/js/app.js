@@ -623,8 +623,10 @@ function renderTable() {
   //   同一条件下的 1/2/3 段算**一个条件**的一组，所以分组键**不含蓄力段**
   //   （段数是组内的细分，不是条件本身）。只是把标题从"同一触发条件"换成招式名。
   const CHARGE_FSM_NAME = { 85: '蓄力', 86: '强蓄力', 102: '真蓄力' };
+  const GAUGE_NAME = { 1: '白刃', 2: '黄刃', 3: '红刃' };
   const condKey = e => [e.weaponType, e.fsmId, e.fsmTarget,
-                         (e.lmtAny || !(e.lmt || []).length) ? 'any' : (e.lmt || []).join(',')].join('|');
+                         (e.lmtAny || !(e.lmt || []).length) ? 'any' : (e.lmt || []).join(','),
+                         (e.gaugeRise > 0) ? ('r' + e.gaugeRise) : ''].join('|');
   const groups = [];
   const groupOf = {};
   view.forEach(item => {
@@ -634,10 +636,14 @@ function renderTable() {
   });
   groups.forEach(g => {
     if (g.items.length > 1) {
+      const allGauge = g.items.every(it => it.e.gaugeRise > 0);
       const allCharge = g.items.every(it => it.e.chargeLevel > 0);
       const fsms = Array.from(new Set(g.items.map(it => it.e.fsmId)));
       let title, hint;
-      if (allCharge) {
+      if (allGauge) {
+        title = '升刃 · ' + g.items.length + ' 条';
+        hint = '（刃级升到该颜色的瞬间各响各的；掉刃后重新计）';
+      } else if (allCharge) {
         title = ((fsms.length === 1 && CHARGE_FSM_NAME[fsms[0]]) ? CHARGE_FSM_NAME[fsms[0]] : '蓄力')
                 + ` · ${g.items.length} 条`;
         hint = '（这两条/几条是同一个蓄力条件的不同段；段数在各自行里显示）';
@@ -687,18 +693,22 @@ function renderTable() {
         isWem ? h('span', { class: 'badge wem', text: 'wem', style: 'margin-left:7px' }) : null,
         (e.chargeLevel > 0) ? h('span', { class: 'badge charge', text: '蓄力' + e.chargeLevel + '段',
           style: 'margin-left:7px', title: '蓄力条目：蓄力涨到第 ' + e.chargeLevel + ' 段的瞬间立即播放' }) : null,
+        (e.gaugeRise > 0) ? h('span', { class: 'badge gauge', text: GAUGE_NAME[e.gaugeRise] || '升刃',
+          style: 'margin-left:7px', title: '升刃条目：刃级升到' + (GAUGE_NAME[e.gaugeRise] || '') +
+            '的那一瞬间播放一次（不看 FSM / LMT）' }) : null,
         isOff ? h('span', { class: 'badge off', text: '已停用', style: 'margin-left:7px' }) : null,
         inCombo ? null : h('span', { class: 'badge warn', text: '未激活', style: 'margin-left:7px' })),
       h('td', {}, wInline(e.weaponType)),   // 武器列由表格 class 整体隐藏（表头+单元格一起，避免错位）
       // WEM 视图：WEM id + 序号（nbnk 内第几个）；派生视图：LMT + FSMId
       isWem
         ? h('td', { class: 'lmt' }, h('span', { class: 'mono', text: String(e.media) }))
-        : h('td', { class: 'lmt' }, e.lmtAny || !(e.lmt || []).length ? '不限' : e.lmt.join(',')),
+        : h('td', { class: 'lmt' }, e.gaugeRise > 0 ? '—'
+            : (e.lmtAny || !(e.lmt || []).length ? '不限' : e.lmt.join(','))),
       isWem
         ? h('td', { class: 'fsm', style: 'color:var(--c-blue)', title: e.seqNum ? '' :
             '这个 media id 不在已收录的 nbnk 里，没有序号（它仍能正常触发）' },
             wemSeq(e) || '—')
-        : h('td', { class: 'fsm' }, String(e.fsmId)),
+        : h('td', { class: 'fsm' }, e.gaugeRise > 0 ? ('升' + (GAUGE_NAME[e.gaugeRise] || '')) : String(e.fsmId)),
       // ★ 徽标放最前（长文件名不再把它们挤出可见区）；完整路径与池明细都放 title
       h('td', { title: (sm.detail + '\n' + (entrySounds(e).map(s => s.path).join('\n') || '没有音效')) },
         h('span', { class: 'snd' },
@@ -888,7 +898,7 @@ async function captureToEntry(r) {
     combo: w >= 0 ? (ST.active[w] || '') : '',
     fsmId: fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -936,7 +946,7 @@ async function addWemRecord(r) {
     name: wemSeq(r) || wemBank(r) || ('media ' + media), weaponType: w, combo,
     media: media, bank: r.bank || '', fsmId: -1, fsmTarget: -1, group: '', stop: false,
     lmt: [], lmtAny: false,   // 不限不勾选：wem 条目可以填 LMT 作为附加条件
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -1113,7 +1123,7 @@ const JUDGE_FALLBACK = [
 function blankEntry() {
   return { name: '', weaponType: ST.weaponFilter >= 0 ? ST.weaponFilter : -1, combo: '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [] };
 }
@@ -1256,6 +1266,7 @@ function fillEditor() {
     if (cr) cr.hidden = !isChargeWeapon;
     if (ch) ch.hidden = !isChargeWeapon;
     if (cs && !isChargeWeapon) cs.value = '0';
+    syncTrig();
     fillComboSelect(); fillPools();
   };
 
@@ -1297,9 +1308,58 @@ function fillEditor() {
   $('#edFinalMode').onchange = ev => e.checkMode = ev.target.checked ? 1 : 0;
   $('#edAdvanced').onchange = ev => { ED.judgeBox = ev.target.checked; $('#edJudgeBox').hidden = !ED.judgeBox; };
 
+  // 触发方式：动作命中（按 FSM/LMT） / 刃级升段（太刀）
+  // 刃级升段只受武器过滤，FSM / LMT / 蓄力都不参与 → 选它时把这几行藏起来
+  function syncTrig() {
+    const gauge = (e.gaugeRise > 0);
+    const ms = document.querySelector('#edTrigMode');
+    const gr = document.querySelector('#edGaugeRise');
+    const th = document.querySelector('#edTrigHint');
+    const rowFsm = document.querySelector('#edRowFsm');
+    const rowLmt = document.querySelector('#edRowLmt');
+    const lh = document.querySelector('#edLmtHint');
+    const cr = document.querySelector('#edChargeRow');
+    const chh = document.querySelector('#edChargeHint');
+    const dr = document.querySelector('#edChargeDerivRow');
+    const isGswd = (e.weaponType === 0);
+    if (ms) ms.value = gauge ? 'gauge' : 'action';
+    if (gr) { gr.hidden = !gauge; gr.value = String(gauge ? e.gaugeRise : 3); }
+    if (th) th.hidden = !gauge;
+    if (rowFsm) rowFsm.style.display = (gauge || isWem) ? 'none' : '';
+    if (rowLmt) rowLmt.hidden = gauge;
+    if (lh) lh.hidden = gauge;
+    if (cr) cr.hidden = gauge || !isGswd;
+    if (chh) chh.hidden = gauge || !isGswd;
+    if (dr) dr.hidden = gauge || !isGswd || !(e.chargeLevel > 0);
+  }
+  {
+    const ms = document.querySelector('#edTrigMode');
+    const gr = document.querySelector('#edGaugeRise');
+    if (ms) ms.onchange = () => {
+      if (ms.value === 'gauge') {
+        if (e.weaponType !== 3) toast('刃级只有太刀有：别的武器选了不会触发', 'warn');
+        if (!(e.gaugeRise > 0)) e.gaugeRise = gr ? (parseInt(gr.value, 10) || 3) : 3;
+        // 升刃不看动作：把动作条件清干净，免得配了个永不命中的 FSM
+        e.fsmId = -1; e.lmt = []; e.lmtAny = true; e.chargeLevel = 0; e.chargeCut = false;
+        const fi = $('#edFsm'), li = $('#edLmt'), la = $('#edLmtAny'), cs = $('#edCharge'), cb = $('#edChargeCut');
+        if (fi) fi.value = -1;
+        if (li) li.value = '';
+        if (la) la.checked = true;
+        if (cs) cs.value = '0';
+        if (cb) cb.checked = false;
+      } else {
+        e.gaugeRise = 0;
+      }
+      syncTrig();
+      lmtHint();
+    };
+    if (gr) gr.onchange = () => { e.gaugeRise = parseInt(gr.value, 10) || 3; syncTrig(); };
+  }
+
   fillComboSelect();
   lmtHint();
   judgeNote();
+  syncTrig();
   fillPools();
   fillConds();
 }
@@ -1698,7 +1758,7 @@ async function addFsmToCombo(row) {
     name: row.name || ('fsm ' + row.fsm), weaponType: row.weapon, combo,
     fsmId: row.fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };

@@ -598,7 +598,11 @@ void ProbePage() {
         L"logoOk:(logo?logo.naturalWidth>0:null),"
         L"capType:(typeof Capture),api:apiInfo,hosts:hosts.length,capRows:cm+'/'+cb,view:view,"
         L"layout:layout,wemView:wemView,capStat:(stat?stat.textContent:''),capFilter:(filt?filt.textContent:''),"
-        L"capText:ct,dllWarn:dwS,thCols:etc,rowCols:erc,weaponColHidden:ehw,weaponOn:wOn+'/'+wsw.length,weaponOffRows:wOff+'/'+wOffX,bank:bank,jsErr:jse,status:(st?st.textContent:'')"
+        L"capText:ct,dllWarn:dwS,thCols:etc,rowCols:erc,weaponColHidden:ehw,weaponOn:wOn+'/'+wsw.length,weaponOffRows:wOff+'/'+wOffX,bank:bank,"
+        // 升刃条目自检：徽标数（后端 gaugeRise 是否传到前端）+ 触发方式下拉的选项数（HTML 是否更新）
+        L"gauge:document.querySelectorAll('.badge.gauge').length,"
+        L"trigOpts:(document.getElementById('edTrigMode')?document.getElementById('edTrigMode').children.length:-1),"
+        L"jsErr:jse,status:(st?st.textContent:'')"
         L"});})()",
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
             [](HRESULT, LPCWSTR json) -> HRESULT {

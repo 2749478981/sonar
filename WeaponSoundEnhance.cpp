@@ -1229,6 +1229,12 @@ struct Attack
     Pool defPool;                 // default pool (tag = "any")
     Pool gaugePool[4];            // LS gauge pools, keyed by level 0..3
     Pool chargePool[4];           // 蓄力等级池（大剑/弓/锤），keyed by 蓄力段 0..3
+    // ★ 刃级升段条目：GaugeRise=1/2/3 表示"太刀刃级升到 N 的那一瞬间"触发
+    //   （1=白刃 2=黄刃 3=红刃），用来做"开红刃放 BGM"这种跟动作无关的音效。
+    //   只看武器过滤：FSM/LMT 对它不生效（升刃那一刻人在哪一招是不固定的）。
+    //   0 = 普通条目。
+    int gaugeRise = 0;
+    bool gaugeLatched = true;     // 初始视为"已经响过"：必须先看到掉到该级以下，升上来才响（避免读档/重载时刃色已经够而误响一次）
     bool stop = false;            // Stop=1：命中这条时停止正在播放的音效（无音效条目）
     // ★ 前置条件：要求"上一条触发过音效的条目"是这条指定的动作（fsm/lmt），
     //   用来做"只有在接了某个动作之后才响"的连段音效。-1 = 不要求。
@@ -1313,6 +1319,9 @@ struct Attack
     {
         for (int i = 0; i < 4; ++i) chargeFired[i] = false;
     }
+
+    // 是不是"刃级升段"条目（GaugeRise>0）。
+    bool HasGaugeRise() const { return gaugeRise > 0; }
 };
 
 // 0..3 -> names used by Sound:<tag> keys
@@ -2177,6 +2186,12 @@ void LoadConfig()
         } else if (key == "ChargeLevel") {
             const int cl = std::atoi(val.c_str());   // 0=不是蓄力条目；1..3=负责第 N 段
             cur.chargeLevel = (cl >= 1 && cl <= 3) ? cl : 0;
+        } else if (key == "GaugeRise") {
+            // 1=白刃 2=黄刃 3=红刃；写 none/white/yellow/red 也认
+            const std::string g = ToLower(Trim(val));
+            int gr = std::atoi(g.c_str());
+            if (!(gr >= 0 && gr <= 3)) gr = GaugeTagToLevel(g);
+            cur.gaugeRise = (gr >= 1 && gr <= 3) ? gr : 0;
         } else if (key == "PrevFsm") {
             cur.prevFsm = std::atoi(val.c_str());
         } else if (key == "PrevLmt") {
@@ -3337,6 +3352,33 @@ DWORD WINAPI WorkerProc(LPVOID)
                              e.name.c_str(), weapon, fsm, lmt);
                     } else if (!matchBase) {
                         e.inMatch = false;
+                    }
+                    continue;
+                }
+
+                // ★ 刃级升段条目（GaugeRise=1/2/3）：太刀刃级升到该级的瞬间触发。
+                //   不看 FSM/LMT —— 升刃那一刻正在哪一招是不固定的，配 FSM 反而永远不中；
+                //   只保留武器过滤与前置条件，所以"开红刃放 BGM"只要配一条即可。
+                if (e.gaugeRise > 0) {
+                    const bool weaponOk =
+                        WeaponPermitted(e.weaponType, weapon) &&
+                        (e.weaponType < 0 || e.weaponType == weapon);
+                    if (!weaponOk) { e.gaugeLatched = false; continue; }
+                    const int gv = player::gGauge;      // 0..3，-1=读不到
+                    if (gv < e.gaugeRise) { e.gaugeLatched = false; continue; }  // 掉刃 → 解锁
+                    if (!e.gaugeLatched) {
+                        e.gaugeLatched = true;
+                        const std::string gtag = "a[" + e.name + "]";
+                        if (nowMs - e.lastTriggerMs >= (std::uint64_t)gDebounceMs) {
+                            if (FireEntry(e, gauge, rng, nowMs, gtag)) {
+                                e.lastTriggerMs = nowMs;
+                                LogD("[gauge] rise -> %d   %s", gv, e.name.c_str());
+                            } else {
+                                e.gaugeLatched = false;    // 没播成，下帧重试
+                            }
+                        } else {
+                            e.gaugeLatched = false;        // 防抖拦下，允许下帧再试
+                        }
                     }
                     continue;
                 }

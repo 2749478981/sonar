@@ -26,6 +26,9 @@
   --row-sel-bg:#e8f2ff; --row-line:#f0f1f4;
   --input-bg:var(--bg); --input-focus-bg:#fff;
   --btn-bg:var(--panel);
+  /* 动效曲线：hover/按下用欠阻尼（微弹一下），展开/淡入淡出用减速曲线 */
+  --ease-spring:cubic-bezier(.34,1.56,.64,1);
+  --ease-out:cubic-bezier(.215,.61,.355,1);
   --deco-display:none;
   --badge-bg:#f3e8ff; --badge-fg:var(--c-purple);
 }
@@ -107,7 +110,8 @@ em{font-style:normal; color:var(--muted); font-size:.92em}
 button{
   background:var(--btn-bg); border:var(--bw) solid var(--line-2); color:var(--text);
   border-radius:var(--radius-ctl); padding:6px 13px; font-size:12.5px; font-weight:var(--fw-btn);
-  cursor:pointer; box-shadow:var(--shadow-ctl); transition:transform .1s, box-shadow .1s, background .12s, border-color .12s;
+  cursor:pointer; box-shadow:var(--shadow-ctl);
+  transition:transform .17s var(--ease-spring), box-shadow .16s var(--ease-out), background .14s, border-color .14s, color .14s;
 }
 button:hover{transform:translateY(var(--lift)); box-shadow:var(--shadow-ctl-hover); border-color:var(--accent)}
 button:active{transform:translateY(0) var(--press)}
@@ -144,7 +148,10 @@ input[type=text],input[type=number],select{
   padding:6px 11px; font-size:12.5px; outline:none; min-width:0;
 }
 input[type=text]:focus,input[type=number]:focus,select:focus{
-  background:var(--input-focus-bg); border-color:var(--accent)
+  background:var(--input-focus-bg); border-color:var(--accent);
+  /* 聚焦用"加深双环"代替 outline：内圈实、外圈淡，不跳布局也不糊 */
+  box-shadow:0 0 0 1px var(--accent),
+             0 0 0 4px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 input::placeholder{color:var(--dim)}
 input.num{width:92px; font-family:ui-monospace,Consolas,monospace}
@@ -237,13 +244,13 @@ table{width:100%; border-collapse:collapse; font-size:12.5px}
 th{
   position:sticky; top:0; z-index:2; text-align:left; font-weight:700; font-size:11px;
   letter-spacing:.5px; color:var(--muted); text-transform:uppercase; background:var(--table-head-bg);
-  padding:9px 13px; border-bottom:var(--bw) solid var(--line); white-space:nowrap;
+  padding:9px 13px; border-bottom:1px solid var(--line); white-space:nowrap;
 }
 th.sortable{cursor:pointer; user-select:none}
 th.sortable:hover{color:var(--text)}
 th.sortable.asc::after{content:" ▲"; color:var(--accent)}
 th.sortable.desc::after{content:" ▼"; color:var(--accent)}
-td{padding:8px 13px; border-bottom:var(--bw) solid var(--row-line); background:var(--row-bg); font-weight:var(--fw)}
+td{padding:8px 13px; border-bottom:1px solid var(--row-line); background:var(--row-bg); font-weight:var(--fw)}
 tbody tr{cursor:pointer; transition:.1s}
 tbody tr:hover td{background:var(--row-hover)}
 tbody tr.sel td{background:var(--row-sel-bg)}
@@ -801,6 +808,8 @@ html.overlay-mode .ovbar .ovx:hover{background:rgba(255,255,255,.25)}
 .bankhdr-right .note{margin:0}
 /* 条目列表里的「蓄力N段」徽标（与 wem 徽标同风格，颜色区分） */
 .badge.charge{background:var(--c-purple, #a06bff); color:#fff}
+/* 升刃条目（白/黄/红刃）：红刃用警示色，白黄用中性色 */
+.badge.gauge{background:var(--c-amber, #ff9f0a); color:#1b1200}
 /* 已按武器筛选时整列隐藏「武器」：表头和单元格一起，避免列错位 */
 #entryTable.hideweapon th:nth-child(2),
 #entryTable.hideweapon td:nth-child(2){display:none}
@@ -882,3 +891,22 @@ td .enbox{width:15px; height:15px; margin:0 7px 0 0; vertical-align:middle; curs
 .pvbar.paused .pvname{opacity:.65}
 .pvbar.paused .pvseek::-webkit-slider-runnable-track{opacity:.6}
 html.overlay-mode .pvbar{display:none !important}
+/* ===========================================================================
+   细节打磨（"参考有用的"那部分设计铁律）
+   =========================================================================== */
+/* 数字等宽：序号 / media id / LMT / FSM / 时间 / 时长对齐全，扫表不跳列 */
+td.lmt, td.fsm, .mono, .num, .pvtime, .banksum b, .stat b, .wcount{
+  font-variant-numeric:tabular-nums;
+}
+/* 正文换行别制造孤字；标题也不要在末尾留一个词 */
+p, .hint, .betip, .stephint, .note, .tip, .bankhelp, .sq-hint{text-wrap:pretty}
+h1, h2, h3, .phead, .betitle{text-wrap:balance}
+/* 行内图标与文字垂直居中对齐（-0.125em 是最不容易看出偏移的值） */
+.nm .wico, td .wico, .capmeta img, .wtag img, .hrec img{vertical-align:-0.125em}
+/* 徽标 / 提示条：进出场用减速曲线，别硬切 */
+.toast{transition:opacity .18s var(--ease-out), transform .22s var(--ease-out)}
+/* 折叠区（动作组 / 高级设置 / 判定）用高度过渡，展开不再"跳一下" */
+#edGroupBox, #edAdvBox, #edJudgeBox{transition:opacity .16s var(--ease-out)}
+/* 滑杆拖动时不要有回弹：thumb 缩放跟手 */
+input[type=range]::-webkit-slider-thumb{transition:transform .1s var(--ease-out)}
+input[type=range]:active::-webkit-slider-thumb{transform:scale(1.12)}
