@@ -2792,6 +2792,7 @@ async function refresh() {
   $('#statusText').textContent = s.iniPath
     ? ((s.isGameIni ? '✓ 已加载（游戏读取的那份）：' : '⚠ 正在编辑的不是游戏读取的那份：') + s.iniPath)
     : '未加载配置';
+    refreshHome();   // 不是游戏读的那份配置 → 顶部提醒条（含一键迁移）
 
   // 全局选项
   const g = ST.global;
@@ -3112,6 +3113,93 @@ window.__pvStop = async () => {
    否则外部模块里会出现 "$$ is not defined" 这类错误（踩过一次）。
    ★ 防御式写法：逐个 typeof 检查，任何一个缺失都不至于让整个导出抛错。
    =========================================================================== */
+  /* ===== 位置提醒：GUI 不在游戏目录 / 改的不是游戏读的那份 ===== */
+  let HOME = { gameFound: false };
+  let homeIgnored = false;
+  let homeAt = 0;
+  async function refreshHome(force) {
+    const box = document.getElementById('homeWarn');
+    if (!box) return;
+    const now = Date.now();
+    if (!force && now - homeAt < 3000) return;
+    homeAt = now;
+    let r = null;
+    try { r = await Backend.call('home.status', {}); } catch (e) { return; }
+    if (!r) return;
+    HOME = r;
+    const show = !r.isGameIni;
+    box.hidden = !show || homeIgnored;
+    if (!show) return;
+    const t = document.getElementById('hwTitle');
+    const ps = document.getElementById('hwPaths');
+    const hint = document.getElementById('hwHint');
+    const openBtn = document.getElementById('hwOpen');
+    const mig = document.getElementById('hwMigrate');
+    t.textContent = r.gameFound ? '你现在改的不是游戏读的那份配置' : '没找到游戏目录，你改的这份游戏读不到';
+    ps.textContent = '';
+    const mk = (label, val) => {
+      const d = document.createElement('div');
+      d.textContent = label + ' ';
+      const s = document.createElement('span');
+      s.className = 'p';
+      s.textContent = val || '—';
+      d.appendChild(s);
+      return d;
+    };
+    ps.appendChild(mk('游戏读的：', r.gameIniPath || '（找不到游戏目录）'));
+    ps.appendChild(mk('你在改的：', r.iniPath));
+    hint.textContent = r.gameFound
+      ? '「一键迁移到游戏目录」会把这整份（配置 · 音效 · 界面文件 · 插件 DLL）复制过去，并用你现在这份配置覆盖游戏那份。'
+      : '游戏装在别的盘？点「选择游戏目录…」，选中 MonsterHunterWorld.exe 所在的文件夹。';
+    mig.textContent = r.gameFound ? '一键迁移到游戏目录' : '选择游戏目录…';
+    mig.onclick = onMigrate;
+    openBtn.hidden = !(r.gameGui && !r.inGame);
+    openBtn.onclick = async () => {
+      try { await Backend.call('home.openGameGui', {}); toast('已打开游戏目录里的那份，当前这个可以关掉了', 'ok', 'home'); }
+      catch (e) { toast(e.message, 'err', 'home'); }
+    };
+  }
+  async function pickGameDir() {
+    try {
+      const r = await Backend.call('home.pickGame', {});
+      if (!r || r.cancelled) return;
+      toast('游戏目录：' + r.gameDir, 'ok', 'home');
+      await refreshHome(true);
+    } catch (e) { toast(e.message, 'err', 'home'); }
+  }
+  async function onMigrate() {
+    if (!HOME.gameFound) { await pickGameDir(); return; }
+    const msg = '会复制到：<br><code>' + (HOME.gameDataDir || '') + '</code><br><br>' +
+      '包含配置、音效、界面文件和插件 DLL；<b>同名的旧文件会被覆盖</b>。<br>' +
+      '游戏正在运行时插件 DLL 可能换不掉，关掉游戏再迁移更稳。';
+    if (!(await confirmBox({ title: '迁移到游戏目录', message: msg, okText: '开始迁移', danger: false }))) return;
+    let m = null;
+    try { m = await Backend.call('home.migrate', {}); }
+    catch (e) { toast(e.message, 'err', 'home'); return; }
+    let extra = '';
+    if (m.dllBlocked) extra += '<br><b>插件 DLL 没换掉</b>（游戏正在运行占用）：关掉游戏后再点一次迁移。';
+    if (m.failed) extra += '<br>' + m.failed + ' 个文件复制失败' +
+      (m.errors && m.errors.length ? '：<br>' + m.errors.join('<br>') : '');
+    const ask = await confirmBox({
+      title: m.already ? '已经在游戏目录里了' : '迁移完成',
+      message: m.already ? '这个 GUI 本来就在游戏目录里，不用迁移。'
+        : ('复制了 <b>' + m.copied + '</b> 个文件到：<br><code>' + (m.target || '') + '</code>' + extra +
+           '<br><br>要现在打开游戏目录里的那份吗？（当前这个可以关掉）'),
+      okText: m.gameGui ? '打开' : '好', danger: false
+    });
+    if (ask && m.gameGui) {
+      try { await Backend.call('home.openGameGui', {}); } catch (e) {}
+    }
+    homeIgnored = false;
+    await refreshHome(true);
+  }
+  (function initHome() {
+    const hide = document.getElementById('hwHide');
+    if (hide) hide.onclick = () => { homeIgnored = true; const b = document.getElementById('homeWarn'); if (b) b.hidden = true; };
+    const pick = document.getElementById('hwPick');
+    if (pick) pick.onclick = pickGameDir;
+  })();
+
 window.SonarAPI = (function () {
   const api = {};
   function put(name, val) { if (typeof val !== 'undefined') api[name] = val; }

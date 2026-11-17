@@ -602,6 +602,8 @@ void ProbePage() {
         // 升刃条目自检：徽标数（后端 gaugeRise 是否传到前端）+ 触发方式下拉的选项数（HTML 是否更新）
         L"gauge:document.querySelectorAll('.badge.gauge').length,"
         L"trigOpts:(document.getElementById('edTrigMode')?document.getElementById('edTrigMode').children.length:-1),"
+        // 位置提醒条是否显示（不是游戏读的那份时该出现）
+        L"home:((document.getElementById('homeWarn')&&!document.getElementById('homeWarn').hidden)?'shown':'hidden')+'/'+(document.getElementById('hwMigrate')?document.getElementById('hwMigrate').textContent:''),"
         L"jsErr:jse,status:(st?st.textContent:'')"
         L"});})()",
         Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
@@ -1054,11 +1056,19 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         LogLine("assetsdiag: %s", g_core.Handle("assets.diag", "{}").c_str());
         // 转换环境（ffmpeg / Wwise / vgmstream）：用户"明明装了 ffmpeg 却报找不到"时看这一行
         LogLine("convertenv: %s", g_core.Handle("wem.convertEnv", "{}").c_str());
+        // 位置诊断：GUI 是不是在游戏目录、改的是不是游戏读的那份（用户把发布包解压到别处会命中）
+        LogLine("home: %s", g_core.Handle("home.status", "{}").c_str());
         // 设置 WSE_SELFTEST=1 启动时跑一次转换自检（ffmpeg + Wwise），排查"导出没产出 wem"
         {
             wchar_t st[8] = {};
             if (::GetEnvironmentVariableW(L"WSE_SELFTEST", st, 8) > 0 && st[0] == L'1')
                 LogLine("wemSelftest: %s", g_core.Handle("wem.selftest", "{}").c_str());
+        }
+        // 设置 WSE_MIGRATE=1 启动时跑一次"一键迁移"（自动化验证用；正常用户走界面按钮）
+        {
+            wchar_t st[8] = {};
+            if (::GetEnvironmentVariableW(L"WSE_MIGRATE", st, 8) > 0 && st[0] == L'1')
+                LogLine("homemigrate: %s", g_core.Handle("home.migrate", "{}").c_str());
         }
     }
     ::ShowWindow(hwnd, SW_SHOW);

@@ -30,6 +30,22 @@
     </div>
   </header>
 
+  <!-- ============ 位置提醒：不是游戏读取的那份配置 ============ -->
+  <div class="homewarn" id="homeWarn" hidden>
+    <div class="hwicon">⚠</div>
+    <div class="hwmain">
+      <div class="hwtitle" id="hwTitle">你现在改的不是游戏读的那份配置</div>
+      <div class="hwpaths" id="hwPaths"></div>
+      <div class="hwhint" id="hwHint"></div>
+    </div>
+    <div class="hwbtns">
+      <button class="primary" id="hwMigrate" title="把这整份（配置 + 音效 + 插件 DLL）复制到游戏目录，并切换过去">一键迁移到游戏目录</button>
+      <button id="hwPick" title="游戏装在别的盘／Steam 库位置特殊时用它">选择游戏目录…</button>
+      <button id="hwOpen" hidden title="打开游戏目录里的那份（关掉当前这个即可）">打开游戏目录里的版本</button>
+      <button class="ghost" id="hwHide" title="这次先不管，下次启动再提醒">忽略</button>
+    </div>
+  </div>
+
   <!-- ============ 工具栏（第一排：文件 / 游戏）============ -->
   <div class="toolbar box">
     <button data-act="cfg.open">打开 ini</button>

@@ -583,6 +583,162 @@ bool FindGameDirFromSelf(std::string& out) {
     }
     return false;
 }
+// ---------- 找游戏目录（用户可能把发布包解压到别处，GUI 就不在游戏里） ----------
+std::wstring ExtendPath(const std::wstring& p);   // 定义在下面（长路径前缀）
+
+// 读整个文件（宽路径，<=64MB）；失败返回 false
+static bool ReadAllBytesW(const std::wstring& path, std::vector<unsigned char>& out) {
+    out.clear();
+    HANDLE h = ::CreateFileW(ExtendPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER sz{};
+    if (::GetFileSizeEx(h, &sz) && sz.QuadPart > 0 && sz.QuadPart < (1LL << 26)) {
+        out.resize((std::size_t)sz.QuadPart);
+        DWORD got = 0;
+        if (!::ReadFile(h, out.data(), (DWORD)out.size(), &got, nullptr) || got != (DWORD)out.size()) out.clear();
+    }
+    ::CloseHandle(h);
+    return !out.empty();
+}
+
+// 读注册表字符串（Steam 安装路径等），失败返回空
+static std::string RegStrUtf8(HKEY root, const wchar_t* sub, const wchar_t* name) {
+    HKEY k = nullptr;
+    if (::RegOpenKeyExW(root, sub, 0, KEY_READ | KEY_WOW64_32KEY, &k) != ERROR_SUCCESS &&
+        ::RegOpenKeyExW(root, sub, 0, KEY_READ, &k) != ERROR_SUCCESS) return std::string();
+    wchar_t buf[2048]{};
+    DWORD cb = (DWORD)sizeof(buf) - sizeof(wchar_t), type = 0;
+    const LONG r = ::RegQueryValueExW(k, name, nullptr, &type, (LPBYTE)buf, &cb);
+    ::RegCloseKey(k);
+    if (r != ERROR_SUCCESS) return std::string();
+    return Utf8FromWide(buf);
+}
+
+// 统一成「带结尾反斜杠」的目录形式；用户可能选的是 exe 本身
+static std::string AsDirUtf8(std::string p) {
+    p = Trim(p);
+    if (p.size() > 4 && _stricmp(p.c_str() + p.size() - 4, ".exe") == 0) {
+        const std::size_t s = p.find_last_of("\\/");
+        p = (s == std::string::npos) ? std::string() : p.substr(0, s + 1);
+    }
+    for (std::size_t i = 0; i < p.size(); ++i) if (p[i] == '/') p[i] = '\\';
+    // 折叠重复的分隔符（"D:\\mod3" 这种手写/JSON 双层转义导致的怪路径）
+    std::string q;
+    q.reserve(p.size());
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        if (p[i] == '\\' && !q.empty() && q[q.size() - 1] == '\\') continue;
+        q += p[i];
+    }
+    p.swap(q);
+    if (!p.empty() && p[p.size() - 1] != '\\') p += '\\';
+    return p;
+}
+
+// 从 Steam 的 libraryfolders.vdf 里列出所有库根目录（带结尾反斜杠）
+static void SteamLibraries(std::vector<std::string>& out) {
+    std::string steam = RegStrUtf8(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath");
+    if (steam.empty()) steam = RegStrUtf8(HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\Valve\\Steam", L"InstallPath");
+    if (steam.empty()) steam = RegStrUtf8(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Valve\\Steam", L"InstallPath");
+    if (steam.empty()) return;
+    steam = AsDirUtf8(steam);
+    std::vector<std::string> vdfs;
+    vdfs.push_back(steam + "steamapps\\libraryfolders.vdf");
+    vdfs.push_back(steam + "config\\libraryfolders.vdf");
+    for (std::size_t i = 0; i < vdfs.size(); ++i) {
+        std::vector<unsigned char> raw;
+        if (!ReadAllBytesW(Utf8ToWide(vdfs[i]), raw) || raw.empty()) continue;   // 文件不存在就跳过
+        const std::string text(raw.begin(), raw.end());
+        std::size_t pos = 0;
+        while ((pos = text.find("\"path\"", pos)) != std::string::npos) {
+            const std::size_t q1 = text.find('"', pos + 6);
+            if (q1 == std::string::npos) break;
+            const std::size_t q2 = text.find('"', q1 + 1);
+            if (q2 == std::string::npos) break;
+            std::string val = text.substr(q1 + 1, q2 - q1 - 1);
+            std::string un;
+            for (std::size_t j = 0; j < val.size(); ++j) {
+                if (val[j] == '\\' && j + 1 < val.size() && (val[j + 1] == '\\' || val[j + 1] == '/')) { un += '\\'; ++j; }
+                else un += val[j];
+            }
+            out.push_back(AsDirUtf8(un));
+            pos = q2 + 1;
+        }
+        if (!out.empty()) break;
+    }
+    if (out.empty()) out.push_back(steam);
+}
+
+// 依次尝试：用户指定 → 自身往上找 → Steam 库 → 各固定盘的常见路径
+bool FindGameDirAny(std::string& out, const std::string& prefUtf8) {
+    const std::string pref = AsDirUtf8(prefUtf8);
+    if (!pref.empty() && FsExists(pref + "MonsterHunterWorld.exe")) { out = pref; return true; }
+    if (FindGameDirFromSelf(out)) return true;
+
+    std::vector<std::string> libs;
+    SteamLibraries(libs);
+    for (std::size_t i = 0; i < libs.size(); ++i) {
+        const std::string d = libs[i] + "steamapps\\common\\Monster Hunter World\\";
+        if (FsExists(d + "MonsterHunterWorld.exe")) { out = d; return true; }
+    }
+    static const char* kSubs[] = {
+        "steamapps\\common\\Monster Hunter World\\",
+        "Steam\\steamapps\\common\\Monster Hunter World\\",
+        "SteamLibrary\\steamapps\\common\\Monster Hunter World\\",
+        "Program Files (x86)\\Steam\\steamapps\\common\\Monster Hunter World\\",
+        "Games\\Steam\\steamapps\\common\\Monster Hunter World\\",
+        "Games\\SteamLibrary\\steamapps\\common\\Monster Hunter World\\",
+        "Games\\Monster Hunter World\\",
+    };
+    for (int dc = 'C'; dc <= 'Z'; ++dc) {
+        char root[4] = { (char)dc, ':', '\\', 0 };
+        if (::GetDriveTypeA(root) != DRIVE_FIXED) continue;
+        for (std::size_t s = 0; s < sizeof(kSubs) / sizeof(kSubs[0]); ++s) {
+            const std::string cand = std::string(root) + kSubs[s];
+            if (FsExists(cand + "MonsterHunterWorld.exe")) { out = cand; return true; }
+        }
+    }
+    return false;
+}
+
+// 递归复制目录（宽路径，源/目标都要带结尾反斜杠）；失败只计数不中断
+static void CopyTreeW(const std::wstring& src, const std::wstring& dst, int& copied, int& failed,
+                      int& dllBlocked, std::vector<std::string>& errs) {
+    ::CreateDirectoryW(ExtendPath(dst).c_str(), nullptr);
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = ::FindFirstFileW(ExtendPath(src + L"*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        const std::wstring nm = fd.cFileName;
+        if (nm == L"." || nm == L"..") continue;
+        // 不搬日志（同一个文件被两个进程争用没有意义）
+        if (_wcsicmp(nm.c_str(), L"sonar_gui.log") == 0) continue;
+        const std::wstring s = src + nm, d = dst + nm;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            CopyTreeW(s + L"\\", d + L"\\", copied, failed, dllBlocked, errs);
+            continue;
+        }
+        ::CreateDirectoryW(ExtendPath(dst).c_str(), nullptr);
+        if (::CopyFileW(ExtendPath(s).c_str(), ExtendPath(d).c_str(), FALSE)) { ++copied; continue; }
+        const DWORD e = ::GetLastError();
+        const bool isDll = (nm.size() > 4 && _wcsicmp(nm.c_str() + nm.size() - 4, L".dll") == 0);
+        if (isDll && (e == ERROR_SHARING_VIOLATION || e == ERROR_ACCESS_DENIED || e == ERROR_LOCK_VIOLATION)) ++dllBlocked;
+        else ++failed;
+        if (errs.size() < 5) errs.push_back(Utf8FromWide(nm) + "（错误码 " + std::to_string((int)e) + "）");
+    } while (::FindNextFileW(h, &fd));
+    ::FindClose(h);
+}
+
+// 源目录里是否含 "nativePC" 组件；含就返回它及之前的绝对路径（带结尾反斜杠）
+static bool NativePcRootOf(const std::string& dirUtf8, std::string& rootOut) {
+    std::string low = dirUtf8;
+    for (std::size_t i = 0; i < low.size(); ++i) low[i] = (char)::tolower((int)(unsigned char)low[i]);
+    const std::size_t p = low.find("\\nativepc\\");
+    if (p == std::string::npos) return false;
+    rootOut = dirUtf8.substr(0, p + std::string("\\nativepc\\").size());
+    return true;
+}
+
 // 转成扩展长度路径（\\?\ 前缀）：绕过 MAX_PATH(260) 限制。
 //   组合名 + 文件名常常很长（中文名更占位），超过 260 时 CreateDirectoryW / CopyFileW /
 //   MoveFileExW 都会直接失败 —— 这正是"导出 0 个音效、缺失一堆（错误码 3）"的原因。
@@ -1363,6 +1519,7 @@ struct UiPrefs {
     std::string playerPath;    // 试听用的播放器（如 foobar2000 + vgmstream）
     std::string ffmpegPath;    // 用户手动指定的 ffmpeg.exe（空 = 自动查找）
     std::string wwisePath;     // 用户手动指定的 WwiseConsole.exe（空 = 自动查找）
+    std::string gameDir;       // 用户手动指定的游戏根目录（空 = 自动查找）
 
     UiPrefs() {
         colWidths.set("name", JVal(180));
@@ -1901,7 +2058,7 @@ struct Core::Impl {
 
         std::string gdir;
         bool haveGame = FindGameExeDir(gdir);
-        if (!haveGame) haveGame = FindGameDirFromSelf(gdir);
+        if (!haveGame) haveGame = FindGameDirAny(gdir, std::string());   // 注册表/Steam 库/各盘兜底
         if (haveGame)
             gameIniPath = gdir + "nativePC\\plugins\\WeaponSoundEnhance\\WeaponSoundEnhance.ini";
 
@@ -1944,6 +2101,14 @@ struct Core::Impl {
         }
 
         LoadUiPrefs();
+        // 用户指定过游戏目录：优先按它定位（否则 GUI 在发布包解压目录里会一直改错文件）
+        if (!prefs.gameDir.empty()) {
+            std::string g2;
+            if (FindGameDirAny(g2, prefs.gameDir)) {
+                const std::string gini = g2 + "nativePC\\plugins\\WeaponSoundEnhance\\WeaponSoundEnhance.ini";
+                if (!SamePath(gini, gameIniPath)) gameIniPath = gini;
+            }
+        }
         InitWemWatch();     // 定位 SonarAudio.log / mediaids.txt / 序号真值表
         LoadWemMap();
         LoadWemSeqs();
@@ -1970,6 +2135,14 @@ struct Core::Impl {
         return exeDir + "WeaponSoundEnhance\\WeaponSoundEnhance.ini";
     }
     bool IsGameIni() const { return !gameIniPath.empty() && SamePath(IniPath(), gameIniPath); }
+
+    // 游戏根目录（带结尾反斜杠）：游戏在跑就用进程路径，否则查用户指定 / 注册表 / Steam 库 / 各盘常见目录
+    std::string GameRoot() {
+        std::string g;
+        if (FindGameExeDir(g)) return g;
+        if (FindGameDirAny(g, prefs.gameDir)) return g;
+        return std::string();
+    }
 
     // ---- 条目 / 组合 ----
     std::string ActiveCombo(int w) const {
@@ -2067,6 +2240,7 @@ struct Core::Impl {
         prefs.playerPath = v.optStr("playerPath");
         prefs.ffmpegPath = v.optStr("ffmpegPath");
         prefs.wwisePath = v.optStr("wwisePath");
+        prefs.gameDir = v.optStr("gameDir");
     }
 
     void SaveUiPrefs() {
@@ -2082,6 +2256,7 @@ struct Core::Impl {
         v.set("playerPath", JVal(prefs.playerPath));
         v.set("ffmpegPath", JVal(prefs.ffmpegPath));
         v.set("wwisePath", JVal(prefs.wwisePath));
+        v.set("gameDir", JVal(prefs.gameDir));
         FsWrite(uiPath, JsonDump(v));
         uiDirty = false;
     }
@@ -2099,6 +2274,7 @@ struct Core::Impl {
         v.set("playerPath", JVal(prefs.playerPath));
         v.set("ffmpegPath", JVal(prefs.ffmpegPath));
         v.set("wwisePath", JVal(prefs.wwisePath));
+        v.set("gameDir", JVal(prefs.gameDir));
         return v;
     }
 
@@ -4117,6 +4293,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             d.set("iniPath", JVal(ToSlash(im->IniPath())));
             d.set("gameIniPath", JVal(ToSlash(im->gameIniPath)));
             d.set("isGameIni", JVal(im->IsGameIni()));
+            d.set("gameFound", JVal(!im->GameRoot().empty()));
             d.set("loaded", JVal(im->cfg.loaded));
             d.set("dirty", JVal(im->dirty));
             d.set("uiPath", JVal(ToSlash(im->uiPath)));
@@ -4218,6 +4395,140 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             JVal inner = JVal::obj();
             inner.set("path", JVal(path));
             return Handle("config.load", JsonDump(inner));
+        }
+
+        // ---- 位置检查：GUI 是不是在游戏目录里、要不要一键迁移 ----
+        if (method == "home.status") {
+            const std::string game = im->GameRoot();
+            std::string srcNative;
+            const bool pkg = NativePcRootOf(im->exeDir, srcNative);
+            JVal d = JVal::obj();
+            d.set("gameDir", JVal(ToSlash(game)));
+            d.set("gameFound", JVal(!game.empty()));
+            d.set("dataDir", JVal(ToSlash(im->BaseDir())));
+            d.set("exeDir", JVal(ToSlash(im->exeDir)));
+            d.set("iniPath", JVal(ToSlash(im->IniPath())));
+            d.set("gameIniPath", JVal(ToSlash(im->gameIniPath)));
+            d.set("isGameIni", JVal(im->IsGameIni()));
+            d.set("gameFound", JVal(!im->GameRoot().empty()));
+            d.set("pkgNative", JVal(pkg ? ToSlash(srcNative) : std::string()));
+            const std::string gameData = game.empty() ? std::string()
+                : game + "nativePC\\plugins\\WeaponSoundEnhance\\";
+            d.set("gameDataDir", JVal(ToSlash(gameData)));
+            d.set("inGame", JVal(!game.empty() && SamePath(im->exeDir, gameData)));
+            d.set("gameGui", JVal(FsExists(gameData + "WeaponSoundEnhanceGUI.exe")
+                                 ? ToSlash(gameData + "WeaponSoundEnhanceGUI.exe") : std::string()));
+            d.set("gameRunning", JVal(im->game.IsAttached()));
+            d.set("status", JVal(im->status));
+            return OkJson(d);
+        }
+
+        // 选择游戏目录（选 MonsterHunterWorld.exe 或它的文件夹都行）
+        if (method == "home.pickGame") {
+            std::vector<std::string> one;
+            const std::string pick = OpenFileDialog(
+                owner, L"游戏程序 (MonsterHunterWorld.exe)\0MonsterHunterWorld.exe\0可执行文件 (*.exe)\0*.exe\0所有文件 (*.*)\0*.*\0",
+                nullptr, L"exe", false, one);
+            if (pick.empty()) { JVal d = JVal::obj(); d.set("cancelled", JVal(true)); return OkJson(d); }
+            const std::string dir = AsDirUtf8(pick);
+            if (!FsExists(dir + "MonsterHunterWorld.exe")) {
+                return ErrJson("这个位置没有 MonsterHunterWorld.exe：请选游戏根目录（里面有 MonsterHunterWorld.exe 的那层）");
+            }
+            im->prefs.gameDir = dir;
+            im->SaveUiPrefs();
+            im->gameIniPath = dir + "nativePC\\plugins\\WeaponSoundEnhance\\WeaponSoundEnhance.ini";
+            im->SetStatus("游戏目录已设为: " + dir);
+            JVal d = JVal::obj();
+            d.set("gameDir", JVal(ToSlash(dir)));
+            d.set("status", JVal(im->status));
+            return OkJson(d);
+        }
+
+        // 一键迁移：把当前这份（发布包解压出来的）整个搬到游戏目录，并切到游戏那份配置
+        if (method == "home.migrate") {
+            const std::string game = im->GameRoot();
+            if (game.empty()) {
+                return ErrJson("没找到游戏目录。先点「选择游戏目录…」，选中 MonsterHunterWorld.exe 所在的文件夹。");
+            }
+            const std::string dstNative = game + "nativePC\\";
+            const std::string dstData = dstNative + "plugins\\WeaponSoundEnhance\\";
+            if (SamePath(im->exeDir, dstData)) {
+                JVal d = JVal::obj();
+                d.set("copied", JVal(0));
+                d.set("already", JVal(true));
+                d.set("target", JVal(ToSlash(dstData)));
+                d.set("status", JVal(std::string("已经就在游戏目录里了，不用迁移")));
+                return OkJson(d);
+            }
+            int copied = 0, failed = 0, dllBlocked = 0;
+            std::vector<std::string> errs;
+            std::string srcNative;
+            const bool pkg = NativePcRootOf(im->exeDir, srcNative);
+            if (pkg) {
+                // 发布包结构 <包>\nativePC\plugins\... ：整个 nativePC 合并过去（含插件 DLL）
+                CopyTreeW(Utf8ToWide(srcNative), Utf8ToWide(dstNative), copied, failed, dllBlocked, errs);
+            } else {
+                // 只有数据目录：拷进 plugins\WeaponSoundEnhance\，DLL 另找
+                CopyTreeW(Utf8ToWide(im->exeDir), Utf8ToWide(dstData), copied, failed, dllBlocked, errs);
+                const char* dllCand[] = { "WeaponSoundEnhance.dll", "..\\WeaponSoundEnhance.dll",
+                                          "..\\..\\nativePC\\plugins\\WeaponSoundEnhance.dll" };
+                for (std::size_t i = 0; i < sizeof(dllCand) / sizeof(dllCand[0]); ++i) {
+                    const std::string s = im->exeDir + dllCand[i];
+                    if (!FsExists(s)) continue;
+                    if (FsCopy(s, dstNative + "plugins\\WeaponSoundEnhance.dll")) ++copied;
+                    else { ++dllBlocked; }
+                    break;
+                }
+            }
+            // 迁完切到游戏那份配置（用户之后改的就是游戏读的那份）
+            const std::string newIni = dstData + "WeaponSoundEnhance.ini";
+            std::string switched;
+            if (FsExists(newIni)) {
+                Config gc;
+                if (LoadConfig(newIni, gc)) {
+                    im->cfg = gc;
+                    im->cfg.path = newIni;
+                    im->cfg.loaded = true;
+                    im->gameIniPath = newIni;
+                    im->dirty = false;
+                    SetFsmDbDir(im->BaseDir());
+                    ReloadFsmDb();
+                    switched = newIni;
+                }
+            }
+            const bool blocked = (dllBlocked > 0);
+            im->SetStatus(blocked
+                ? ("已迁移 " + std::to_string(copied) + " 个文件；插件 DLL 被游戏占用没换掉（关掉游戏后重试）")
+                : ("已迁移 " + std::to_string(copied) + " 个文件到游戏目录"));
+            JVal d = JVal::obj();
+            d.set("copied", JVal(copied));
+            d.set("failed", JVal(failed));
+            d.set("dllBlocked", JVal(dllBlocked));
+            d.set("target", JVal(ToSlash(dstData)));
+            d.set("switched", JVal(ToSlash(switched)));
+            d.set("gameGui", JVal(FsExists(dstData + "WeaponSoundEnhanceGUI.exe")
+                                 ? ToSlash(dstData + "WeaponSoundEnhanceGUI.exe") : std::string()));
+            JVal errArr = JVal::arr();
+            for (std::size_t i = 0; i < errs.size(); ++i) errArr.push(JVal(errs[i]));
+            d.set("errors", errArr);
+            d.set("status", JVal(im->status));
+            return OkJson(d);
+        }
+
+        // 打开游戏目录里的那个 GUI（迁移完就不用再手动找了）
+        if (method == "home.openGameGui") {
+            const std::string game = im->GameRoot();
+            if (game.empty()) return ErrJson("没找到游戏目录。");
+            const std::string exe = game + "nativePC\\plugins\\WeaponSoundEnhance\\WeaponSoundEnhanceGUI.exe";
+            if (!FsExists(exe)) return ErrJson("游戏目录里还没有 GUI：" + exe + "（先点「一键迁移到游戏目录」）");
+            const HINSTANCE r = ::ShellExecuteW(OwnerOf(owner), L"open", Utf8ToWide(exe).c_str(), nullptr,
+                                                Utf8ToWide(game).c_str(), SW_SHOWNORMAL);
+            const bool ok = ((INT_PTR)r > 32);
+            JVal d = JVal::obj();
+            d.set("launched", JVal(ok));
+            d.set("path", JVal(ToSlash(exe)));
+            if (!ok) return ErrJson("打开失败：" + exe);
+            return OkJson(d);
         }
 
         if (method == "config.switchToGameIni") {
