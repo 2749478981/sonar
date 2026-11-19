@@ -398,6 +398,8 @@ bool LoadConfig(const std::string& path, Config& cfg) {
             cur.group = val;
         } else if (key == "Sound") {
             AppendSpecs(cur.def, val, plainOrder);
+        } else if (key == "Voice") {
+            AppendSpecs(cur.voice, val, plainOrder);
         } else if ((key.size() > 6 && key.compare(0, 6, "Sound:") == 0 &&
                     key.find_first_of("<>=!&|", 6) != std::string::npos) ||
                    (key.size() > 9 && key.compare(0, 9, "SoundEnd:") == 0)) {
@@ -509,6 +511,7 @@ static void WriteEntry(const SoundEntry& e, int n, std::string& o) {
         }
     }
     WritePool(e.def, "Sound", o);
+    WritePool(e.voice, "Voice", o);
     for (int i = 0; i < 4; ++i) {
         std::string k = std::string("Sound:") + GaugeTagName(i);
         WritePool(e.gauge[i], k.c_str(), o);

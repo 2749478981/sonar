@@ -56,6 +56,7 @@ struct SoundEntry {
     //   所以"开红刃放 BGM"只要一条。0 = 普通条目。
     int gaugeRise = 0;
     PoolSpec def;               // 默认音效（Sound=）；启用判定时它是"都不成立"的兜底池
+    PoolSpec voice;             // 语音（Voice=）：和 def 各抽各的，同一次触发同时响一条音效 + 一条语音
     PoolSpec gauge[4];          // 刃时音效 0..3（无/白/黄/红；Sound:none|white|yellow|red）
     PoolSpec charge[4];         // 蓄力等级音效 0..3（大剑/弓/锤；Sound:charge0..3，1=蓄力1段…3=蓄满）
 

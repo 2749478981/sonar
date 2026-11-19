@@ -1704,6 +1704,7 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     v.set("lmtAny", e.lmt.empty());
 
     v.set("def", PoolToJson(e.def));
+    v.set("voice", PoolToJson(e.voice));
     JVal g = JVal::arr();
     for (int i = 0; i < 4; ++i) g.push(PoolToJson(e.gauge[i]));
     v.set("gauge", g);
@@ -1731,6 +1732,7 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     int n = (int)e.def.specs.size();
     for (int i = 0; i < 4; ++i) n += (int)e.gauge[i].specs.size();
     for (int i = 0; i < 4; ++i) n += (int)e.charge[i].specs.size();
+    n += (int)e.voice.specs.size();
     for (std::size_t i = 0; i < e.conds.size(); ++i) n += (int)e.conds[i].pool.specs.size();
     v.set("soundCount", JVal(n));
     return v;
@@ -1823,6 +1825,8 @@ SoundEntry EntryFromJson(const JVal& v, const std::vector<std::string>& allowedC
 
     const JVal* jdef = v.find("def");
     if (jdef) PoolFromJson(*jdef, e.def);
+    const JVal* jvoice = v.find("voice");
+    if (jvoice) PoolFromJson(*jvoice, e.voice);
     const JVal* jg = v.find("gauge");
     if (jg && jg->isArr()) {
         for (int i = 0; i < 4 && i < (int)jg->a.size(); ++i) PoolFromJson(jg->a[i], e.gauge[i]);
@@ -1877,6 +1881,7 @@ std::string EntryKey(const SoundEntry& e) {
     for (std::size_t i = 0; i < e.lmt.size(); ++i) k += std::to_string(e.lmt[i]) + ",";
     k += "|";
     for (std::size_t i = 0; i < e.def.specs.size(); ++i) k += e.def.specs[i].path + ";";
+    for (std::size_t i = 0; i < e.voice.specs.size(); ++i) k += e.voice.specs[i].path + ";";
     for (int i = 0; i < 4; ++i)
         for (std::size_t j = 0; j < e.gauge[i].specs.size(); ++j) k += e.gauge[i].specs[j].path + ";";
     for (int i = 0; i < 4; ++i)
@@ -1886,7 +1891,7 @@ std::string EntryKey(const SoundEntry& e) {
     return k;
 }
 
-// 条目身份键：只描述"这一条是什么"，**不含音效路径**。
+// 条目身份键（保留定义给以后的分组用；导入判重已改回"路径也参与"的 EntryKey）。
 // 用途：导入组合包时，把同一个动作的新一版音效【更新】到已有条目上，
 // 而不是因为路径不同就再加一条（以前的判重键含路径 → 自己导入自己的包就会
 // 冒出成对的重复条目：338 条里有 70 条重复，用户看到的列表和别人的对不上）。
@@ -4002,6 +4007,7 @@ bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::s
         // 四个池 + 条件池统一改写
         std::vector<std::vector<SoundSpec>*> pools;
         pools.push_back(&c2.def.specs);
+        pools.push_back(&c2.voice.specs);
         for (int g = 0; g < 4; ++g) pools.push_back(&c2.gauge[g].specs);
         for (int g = 0; g < 4; ++g) pools.push_back(&c2.charge[g].specs);
         for (std::size_t ci = 0; ci < c2.conds.size(); ++ci) pools.push_back(&c2.conds[ci].pool.specs);
@@ -4179,15 +4185,7 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
     for (std::size_t i = 0; i < im->cfg.entries.size(); ++i)
         have.push_back(EntryKey(im->cfg.entries[i]));
 
-    // 同身份查找表（只有导入组合包时用）：同一个动作的旧条目会被新音效覆盖，
-    // 不再叠一条重复的。
-    std::map<std::string, std::size_t> byIdent;
-    if (importCombo) {
-        for (std::size_t i = 0; i < im->cfg.entries.size(); ++i)
-            byIdent[EntryIdentity(im->cfg.entries[i])] = i;
-    }
-
-    int added = 0, skipped = 0, updated = 0;
+    int added = 0, skipped = 0;
     for (std::size_t i = 0; i < old.entries.size(); ++i) {
         SoundEntry e = old.entries[i];
 
@@ -4197,6 +4195,7 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
             const std::wstring dstDirW = Utf8ToWide(im->BaseDir() + "sounds\\" + folder + "\\");
             std::vector<std::vector<SoundSpec>*> pools;
             pools.push_back(&e.def.specs);
+        pools.push_back(&e.voice.specs);
             for (int g = 0; g < 4; ++g) pools.push_back(&e.gauge[g].specs);
             for (int g = 0; g < 4; ++g) pools.push_back(&e.charge[g].specs);
             for (std::size_t ci = 0; ci < e.conds.size(); ++ci) pools.push_back(&e.conds[ci].pool.specs);
@@ -4238,37 +4237,11 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
         for (std::size_t h = 0; h < have.size(); ++h) if (have[h] == k) { dup = true; break; }
         if (dup) { ++skipped; continue; }
 
-        // 同一个动作（同身份、音效路径不同）→ 覆盖已有条目的音效，而不是再加一条。
-        if (importCombo) {
-            std::map<std::string, std::size_t>::iterator it2 = byIdent.find(EntryIdentity(e));
-            if (it2 != byIdent.end()) {
-                SoundEntry& dst = im->cfg.entries[it2->second];
-                dst.def = e.def;
-                dst.gauge[0] = e.gauge[0]; dst.gauge[1] = e.gauge[1];
-                dst.gauge[2] = e.gauge[2]; dst.gauge[3] = e.gauge[3];
-                dst.charge[0] = e.charge[0]; dst.charge[1] = e.charge[1];
-                dst.charge[2] = e.charge[2]; dst.charge[3] = e.charge[3];
-                dst.conds = e.conds;
-                dst.stop = e.stop;
-                dst.group = e.group;
-                dst.checkDelayMs = e.checkDelayMs;
-                dst.checkTimeoutMs = e.checkTimeoutMs;
-                dst.endOnAction = e.endOnAction;
-                dst.checkMode = e.checkMode;
-                dst.judgePreset = e.judgePreset;
-                dst.checkOffsetMs = e.checkOffsetMs;
-                dst.enabled = e.enabled;
-                ++updated;
-                continue;
-            }
-        }
-
         im->cfg.entries.push_back(e);
         have.push_back(EntryKey(im->cfg.entries.back()));
-        if (importCombo) byIdent[EntryIdentity(im->cfg.entries.back())] = im->cfg.entries.size() - 1;
         ++added;
     }
-    if (added > 0 || updated > 0) im->dirty = true;
+    if (added > 0) im->dirty = true;
 
     std::string extra;
     if (sndCopied > 0)
@@ -4276,7 +4249,6 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
     if (sndMissing > 0)
         extra += "；有 " + std::to_string(sndMissing) + " 个音效在包里没找到，路径保持原样";
     im->SetStatus("导入配置: 新增 " + std::to_string(added) + " 条" +
-                  (updated > 0 ? "，更新同动作 " + std::to_string(updated) + " 条" : std::string()) +
                   "，跳过重复 " + std::to_string(skipped) + " 条" + extra);
 
     // 导入出新组合时自动把对应武器的当前组合切过去：否则条目落在"非激活组合"里，
@@ -4308,7 +4280,6 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
     im->status += "（记得保存再重载游戏配置生效）";
 
     res.set("added", JVal(added));
-    res.set("updated", JVal(updated));
     res.set("skipped", JVal(skipped));
     res.set("relocated", JVal(relocated));
     res.set("soundCopied", JVal(sndCopied));
@@ -4712,6 +4683,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                     if (!hit) {
                         for (std::size_t k = 0; k < e.def.specs.size() && !hit; ++k)
                             if (ToLowerAscii(e.def.specs[k].path).find(q) != std::string::npos) hit = true;
+                        for (std::size_t k = 0; k < e.voice.specs.size() && !hit; ++k)
+                            if (ToLowerAscii(e.voice.specs[k].path).find(q) != std::string::npos) hit = true;
                     }
                     if (!hit && WeaponName(e.weaponType) &&
                         ToLowerAscii(WeaponName(e.weaponType)).find(q) != std::string::npos) hit = true;
@@ -4881,6 +4854,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 if (it == firstIdx.end()) { firstIdx[k] = out.size(); out.push_back(e); continue; }
                 SoundEntry& keep = out[it->second];
                 addPool(keep.def, e.def);
+                addPool(keep.voice, e.voice);
                 for (int g = 0; g < 4; ++g) addPool(keep.gauge[g], e.gauge[g]);
                 for (int g = 0; g < 4; ++g) addPool(keep.charge[g], e.charge[g]);
                 for (std::size_t c = 0; c < e.conds.size(); ++c) {
@@ -4939,7 +4913,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
                 const SoundEntry& e = im->cfg.entries[i];
                 if (w >= 0 && e.weaponType != w) continue;
-                const bool hasSound = !e.def.empty() || !e.gauge[0].empty() || !e.gauge[1].empty() ||
+                const bool hasSound = !e.def.empty() || !e.voice.empty() || !e.gauge[0].empty() || !e.gauge[1].empty() ||
                                       !e.gauge[2].empty() || !e.gauge[3].empty() ||
                                       !e.charge[0].empty() || !e.charge[1].empty() ||
                                       !e.charge[2].empty() || !e.charge[3].empty() ||
@@ -4948,12 +4922,15 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                     ++noSound;
                     if (noSound <= 3) { if (!noSoundNames.empty()) noSoundNames += "、"; noSoundNames += e.name.empty() ? ("#" + std::to_string(i)) : e.name; }
                 }
-                for (std::size_t s = 0; s < e.def.specs.size(); ++s) {
-                    const std::string abs = Utf8FromWide(ResolveAudioDisk(im, e.def.specs[s].path));
-                    if (!FsExists(abs)) {
-                        ++missing;
-                        if (missing <= 3) { if (!missingNames.empty()) missingNames += "、"; missingNames += e.def.specs[s].path; }
-                        break;
+                for (int poolIdx = 0; poolIdx < 2; ++poolIdx) {
+                    const PoolSpec& chkPool = (poolIdx == 0) ? e.def : e.voice;
+                    for (std::size_t s = 0; s < chkPool.specs.size(); ++s) {
+                        const std::string abs = Utf8FromWide(ResolveAudioDisk(im, chkPool.specs[s].path));
+                        if (!FsExists(abs)) {
+                            ++missing;
+                            if (missing <= 3) { if (!missingNames.empty()) missingNames += "、"; missingNames += chkPool.specs[s].path; }
+                            break;
+                        }
                     }
                 }
                 if (e.media <= 0 && e.fsmId < 0 && e.lmt.empty() && e.fsmTarget < 0) ++matchAll;
@@ -5450,21 +5427,22 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             if (!pool || pool->specs.empty()) return ErrJson("这条还没有音效（先加音效再预览）");
 
             // 挑选顺序与游戏一致：固定音效全播；非固定里随机抽一条（旧版"更多音效"关掉时只取第一条）
+            static std::mt19937 pickRng((unsigned)::GetTickCount64());
             std::vector<const SoundSpec*> picked;
-            std::vector<const SoundSpec*> randoms;
-            for (std::size_t i = 0; i < pool->specs.size(); ++i) {
-                if (pool->specs[i].fixed) picked.push_back(&pool->specs[i]);
-                else randoms.push_back(&pool->specs[i]);
-            }
-            if (!randoms.empty()) {
-                if (im->cfg.global.moreSounds) {
-                    static std::mt19937 rng((unsigned)::GetTickCount64());
-                    std::uniform_int_distribution<int> d(0, (int)randoms.size() - 1);
-                    picked.push_back(randoms[d(rng)]);
-                } else {
-                    picked.push_back(randoms[0]);
+            auto pickPool = [&](const PoolSpec& src, std::vector<const SoundSpec*>& out) {
+                std::vector<const SoundSpec*> randoms;
+                for (std::size_t i = 0; i < src.specs.size(); ++i) {
+                    if (src.specs[i].fixed) out.push_back(&src.specs[i]);
+                    else randoms.push_back(&src.specs[i]);
                 }
-            }
+                if (randoms.empty()) return;
+                if (!im->cfg.global.moreSounds) { out.push_back(randoms[0]); return; }
+                std::uniform_int_distribution<int> d(0, (int)randoms.size() - 1);
+                out.push_back(randoms[d(pickRng)]);
+            };
+            pickPool(*pool, picked);
+            // 语音池单独抽一条一起放：游戏里两者就是各抽各的、同时响
+            if (pool != &e.voice && !e.voice.empty()) pickPool(e.voice, picked);
             if (picked.empty()) return ErrJson("这条还没有音效");
 
             StopAllPreview();   // 只在这里停一次；下面几条要叠在一起播（整体效果）
@@ -5813,13 +5791,14 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
         // 诊断：内存里的条目按组合分布（条目数 / 带条件池的条数 / 同名同动作重复条数）
         //   排查"我导出的包和别人导入后看到的不一样"时先看这个：导出只取当前组合。
         if (method == "diag.combos") {
-            std::map<std::string, int> counts, conds, dups;
+            std::map<std::string, int> counts, conds, dups, voices;
             std::map<std::string, int> tuples;
             for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
                 const SoundEntry& e = im->cfg.entries[i];
                 const std::string k = std::to_string(e.weaponType) + "|" + e.combo;
                 counts[k] += 1;
                 if (!e.conds.empty()) conds[k] += 1;
+                if (!e.voice.empty()) voices[k] += 1;
                 std::string lmt;
                 for (std::size_t j = 0; j < e.lmt.size(); ++j) {
                     if (j) lmt += ",";
@@ -5839,6 +5818,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 o.set("key", JVal(it->first));
                 o.set("n", JVal(it->second));
                 o.set("conds", JVal(conds[it->first]));
+                o.set("voices", JVal(voices[it->first]));
                 o.set("dups", JVal(dups[it->first]));
                 arr.push(o);
             }

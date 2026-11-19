@@ -518,6 +518,7 @@ function displayName(e) {
 function entrySounds(e) {
   const out = [];
   (e.def || []).forEach(s => out.push(s));
+  (e.voice || []).forEach(s => out.push(s));
   (e.conds || []).forEach(c => (c.pool || []).forEach(s => out.push(s)));
   return out;
 }
@@ -542,7 +543,8 @@ function soundSummary(e) {
     // 池明细（给 title 用）：默认 x 条 · 判定条件 y 个（z 条）· 刃时 w 条
     detail: `默认 ${(e.def || []).length} 条`
           + (conds ? ` · 判定条件 ${conds} 个（共 ${condSounds} 条）` : '')
-          + (gaugeSounds ? ` · 刃时 ${gaugeSounds} 条` : ''),
+          + (gaugeSounds ? ` · 刃时 ${gaugeSounds} 条` : '')
+          + ((e.voice || []).length ? ` · 语音 ${(e.voice || []).length} 条` : ''),
   };
 }
 function firstLmt(e) { return e.lmtAny || !e.lmt || !e.lmt.length ? -1 : e.lmt[0]; }
@@ -898,7 +900,7 @@ async function captureToEntry(r) {
     combo: w >= 0 ? (ST.active[w] || '') : '',
     fsmId: fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], voice: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -946,7 +948,7 @@ async function addWemRecord(r) {
     name: wemSeq(r) || wemBank(r) || ('media ' + media), weaponType: w, combo,
     media: media, bank: r.bank || '', fsmId: -1, fsmTarget: -1, group: '', stop: false,
     lmt: [], lmtAny: false,   // 不限不勾选：wem 条目可以填 LMT 作为附加条件
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], voice: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -1123,7 +1125,7 @@ const JUDGE_FALLBACK = [
 function blankEntry() {
   return { name: '', weaponType: ST.weaponFilter >= 0 ? ST.weaponFilter : -1, combo: '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], voice: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [] };
 }
@@ -1575,6 +1577,7 @@ function buildPools(box, e) {
   poolSeq = 0;   // 每次渲染重新分配配色
   e.gauge = e.gauge || [[], [], [], []];
   e.charge = e.charge || [[], [], [], []];
+  e.voice = e.voice || [];
 
   const pool = (title, arr, key, canRemove) => {
     const openKey = key;
@@ -1612,6 +1615,8 @@ function buildPools(box, e) {
 
   $('#edDefHead').textContent = isLS ? '默认音效（任意刃时）' : '默认音效';
   pool('默认音效', e.def, 'def', true);
+  box.appendChild(h('div', { class: 'sect' }, '语音（可选：和上面的音效各抽一条，同一瞬间一起响）'));
+  pool('语音', e.voice, 'voice', true);
 
   if (isLS && ED.adv) {
     box.appendChild(h('div', { class: 'sect' }, '刃时音效（太刀专用，未配置的刃色回退默认音效）'));
@@ -1758,7 +1763,7 @@ async function addFsmToCombo(row) {
     name: row.name || ('fsm ' + row.fsm), weaponType: row.weapon, combo,
     fsmId: row.fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], voice: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };

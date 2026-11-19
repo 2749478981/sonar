@@ -1229,6 +1229,10 @@ struct Attack
     Pool defPool;                 // default pool (tag = "any")
     Pool gaugePool[4];            // LS gauge pools, keyed by level 0..3
     Pool chargePool[4];           // 蓄力等级池（大剑/弓/锤），keyed by 蓄力段 0..3
+    // ★ 语音池（Voice=）：和 Sound= 的池**各抽各的**，同一次触发会同时播
+    //   "随机一条音效 + 随机一条语音"。以前想同时出声+声只能用两条同动作的条目
+    //   凑，现在一条就够（两条仍然兼容，老的配置不用改）。
+    Pool voicePool;
     // ★ 刃级升段条目：GaugeRise=1/2/3 表示"太刀刃级升到 N 的那一瞬间"触发
     //   （1=白刃 2=黄刃 3=红刃），用来做"开红刃放 BGM"这种跟动作无关的音效。
     //   只看武器过滤：FSM/LMT 对它不生效（升刃那一刻人在哪一招是不固定的）。
@@ -1301,11 +1305,15 @@ struct Attack
     bool HasSounds() const
     {
         if (!defPool.empty()) return true;
+        if (!voicePool.empty()) return true;
         for (int i = 0; i < 4; ++i) if (!gaugePool[i].empty()) return true;
         for (int i = 0; i < 4; ++i) if (!chargePool[i].empty()) return true;
         for (const auto& c : conds) if (!c.pool.empty()) return true;
         return false;
     }
+
+    // 是不是"只有语音、没有音效"的条目（判定时要允许它单独成立）。
+    bool HasVoice() const { return !voicePool.empty(); }
 
     // 是不是"蓄力等级"条目：配了任一 chargePool 段。
     bool HasCharge() const
@@ -2217,6 +2225,9 @@ void LoadConfig()
             }
         } else if (key == "Sound") {
             AppendSpecs(cur.defPool, val, plainOrder);
+        } else if (key == "Voice") {
+            // 语音池：与 Sound= 各抽各的，同一次触发音效与语音同时响
+            AppendSpecs(cur.voicePool, val, plainOrder);
         } else if ((key.size() > 6 && key.compare(0, 6, "Sound:") == 0) ||
                    (key.size() > 9 && key.compare(0, 9, "SoundEnd:") == 0)) {
             const bool atEnd = (key.size() > 9 && key.compare(0, 9, "SoundEnd:") == 0);
@@ -2414,6 +2425,7 @@ void PreloadSounds()
     };
     for (const auto& a : attacks) {
         addSpecs(a.defPool);
+        addSpecs(a.voicePool);
         for (int i = 0; i < 4; ++i) addSpecs(a.gaugePool[i]);
         for (int i = 0; i < 4; ++i) addSpecs(a.chargePool[i]);
     }
@@ -2862,12 +2874,16 @@ bool FireEntry(const Attack& e, int gauge, std::mt19937& rng, std::uint64_t nowM
     const std::string what = tag + (usedGauge ? std::string(" gauge=") + std::to_string(gauge)
                                               : std::string(" gauge=default"));
     const bool fired = FirePool(pool, rng, nowMs, what);
-    if (fired) {
+    // 语音池：独立抽一条（和上面那条音效互不影响，两边都随机）
+    const bool voiceFired = e.HasVoice()
+        ? FirePool(&e.voicePool, rng, nowMs, what + " voice")
+        : false;
+    if (fired || voiceFired) {
         // 记下"上一条触发过音效的条目"的动作，供前置条件（PrevFsm/PrevLmt）判断
         player::gPrevEntryFsm = (e.fsmId >= 0) ? e.fsmId : player::gFsm;
         player::gPrevEntryLmt = (!e.lmt.empty()) ? e.lmt[0] : player::gLmt;
     }
-    return fired;
+    return fired || voiceFired;
 }
 
 // 蓄力等级池：按 gCharge 段数挑池。charge 无效（-1）时回退默认池。
@@ -2883,7 +2899,9 @@ bool FireCharge(const Attack& e, int charge, std::mt19937& rng, std::uint64_t no
     }
     const std::string what = tag + (usedCharge ? std::string(" charge=") + std::to_string(charge)
                                                : std::string(" charge=default"));
-    return FirePool(pool, rng, nowMs, what);
+    const bool f = FirePool(pool, rng, nowMs, what);
+    const bool v = e.HasVoice() ? FirePool(&e.voicePool, rng, nowMs, what + " voice") : false;
+    return f || v;
 }
 
 // ★ 事件出口实现：SonarAudio 的日志线程每处理一条播放事件就调这里。
@@ -3149,6 +3167,7 @@ void TickJudgeEntry(Attack& e, bool match, std::uint64_t nowMs,
              tag.c_str(), c.text.c_str(), waitEnd ? " (end)" : "",
              v.v[cond::V_DMG], v.v[cond::V_DAURA], v.v[cond::V_MS]);
         FirePool(&c.pool, rng, nowMs, tag + " [" + c.text + "]");
+        if (e.HasVoice()) FirePool(&e.voicePool, rng, nowMs, tag + " voice");
         e.winOpen = false;
         return;
     }
@@ -3158,6 +3177,7 @@ void TickJudgeEntry(Attack& e, bool match, std::uint64_t nowMs,
         LogD("%s judge: timeout, fallback (dmg=%d dAura=%d)",
              tag.c_str(), v.v[cond::V_DMG], v.v[cond::V_DAURA]);
         FirePool(&e.defPool, rng, nowMs, tag + " [timeout]");
+        if (e.HasVoice()) FirePool(&e.voicePool, rng, nowMs, tag + " voice");
         e.winOpen = false;
     }
 }
