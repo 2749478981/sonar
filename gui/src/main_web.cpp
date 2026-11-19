@@ -1070,6 +1070,28 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
             if (::GetEnvironmentVariableW(L"WSE_MIGRATE", st, 8) > 0 && st[0] == L'1')
                 LogLine("homemigrate: %s", g_core.Handle("home.migrate", "{}").c_str());
         }
+        // 设置 WSE_STATS=1 启动时把条目按组合的分布写进日志（排查"导出/导入后不一样"）
+        {
+            wchar_t st[8] = {};
+            if (::GetEnvironmentVariableW(L"WSE_STATS", st, 8) > 0 && st[0] == L'1')
+                LogLine("stats: %s", g_core.Handle("diag.combos", "{}").c_str());
+        }
+        // 设置 WSE_IMPORT=<zip|txt> 启动时跑一次组合导入（自动化验证用；正常用户走界面按钮）
+        {
+            wchar_t buf[1024] = {};
+            if (::GetEnvironmentVariableW(L"WSE_IMPORT", buf, 1024) > 0 && buf[0]) {
+                const std::string u8 = WideToUtf8(buf);
+                std::string arg = "{\"path\":\"";
+                for (std::size_t i = 0; i < u8.size(); ++i) {
+                    const char c = u8[i];
+                    if (c == '\\' || c == '"') arg += '\\';
+                    arg += c;
+                }
+                arg += "\"}";
+                LogLine("importv: %s", g_core.Handle("combo.import", arg).c_str());
+                LogLine("stats2: %s", g_core.Handle("diag.combos", "{}").c_str());
+            }
+        }
     }
     ::ShowWindow(hwnd, SW_SHOW);
     ::UpdateWindow(hwnd);

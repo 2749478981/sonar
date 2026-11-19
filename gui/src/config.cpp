@@ -492,7 +492,9 @@ static void WriteEntry(const SoundEntry& e, int n, std::string& o) {
     if (e.media >= 0) o += "Media=" + std::to_string(e.media) + "\r\n";
     if (!e.bank.empty()) o += "Bank=" + e.bank + "\r\n";
     if (e.fsmTarget >= 0) o += "FSMTarget=" + std::to_string(e.fsmTarget) + "\r\n";
-    if (e.checkTimeoutMs > 0 && !e.conds.empty()) {
+    // 条件池只要有就写：以前还要求 checkTimeoutMs > 0，导致"有条件但没设窗口"的条目
+    // 导出后条件池整块消失（对方导入后那几条静默没声音）。
+    if (!e.conds.empty()) {
         if (e.checkDelayMs > 0)
             o += "CheckDelayMs=" + std::to_string(e.checkDelayMs) + "\r\n";
         o += "CheckTimeoutMs=" + std::to_string(e.checkTimeoutMs) + "\r\n";

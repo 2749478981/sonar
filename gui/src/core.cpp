@@ -1886,6 +1886,19 @@ std::string EntryKey(const SoundEntry& e) {
     return k;
 }
 
+// 条目身份键：只描述"这一条是什么"，**不含音效路径**。
+// 用途：导入组合包时，把同一个动作的新一版音效【更新】到已有条目上，
+// 而不是因为路径不同就再加一条（以前的判重键含路径 → 自己导入自己的包就会
+// 冒出成对的重复条目：338 条里有 70 条重复，用户看到的列表和别人的对不上）。
+std::string EntryIdentity(const SoundEntry& e) {
+    std::string k = std::to_string(e.weaponType) + "|" + e.combo + "|" + e.name + "|" +
+                    std::to_string(e.fsmId) + "|" + std::to_string(e.fsmTarget) + "|";
+    for (std::size_t i = 0; i < e.lmt.size(); ++i) k += std::to_string(e.lmt[i]) + ",";
+    k += "|c" + std::to_string(e.chargeLevel) + "|r" + std::to_string(e.gaugeRise) +
+         "|p" + std::to_string(e.prevFsm) + "," + std::to_string(e.prevLmt);
+    return k;
+}
+
 // 组合名 → 合法文件夹名（去掉 Windows 不允许的字符）
 std::string ComboFolder(const std::string& combo) {
     std::string nm = combo.empty() ? std::string("默认组合") : combo;
@@ -1912,7 +1925,6 @@ std::string TempSubDir(const char* tag) {
     //   组合名/文件名一长就逼近 MAX_PATH(260)，普通 CopyFileW 会直接失败（对端机器没开长路径时）。
     (void)tag;
     return std::string(t) + "wse" + std::to_string((unsigned long)::GetCurrentProcessId()) + "\\";
-           std::to_string((unsigned long)::GetCurrentProcessId()) + "\\";
 }
 
 } // namespace
@@ -4167,7 +4179,15 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
     for (std::size_t i = 0; i < im->cfg.entries.size(); ++i)
         have.push_back(EntryKey(im->cfg.entries[i]));
 
-    int added = 0, skipped = 0;
+    // 同身份查找表（只有导入组合包时用）：同一个动作的旧条目会被新音效覆盖，
+    // 不再叠一条重复的。
+    std::map<std::string, std::size_t> byIdent;
+    if (importCombo) {
+        for (std::size_t i = 0; i < im->cfg.entries.size(); ++i)
+            byIdent[EntryIdentity(im->cfg.entries[i])] = i;
+    }
+
+    int added = 0, skipped = 0, updated = 0;
     for (std::size_t i = 0; i < old.entries.size(); ++i) {
         SoundEntry e = old.entries[i];
 
@@ -4217,19 +4237,47 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
         bool dup = false;
         for (std::size_t h = 0; h < have.size(); ++h) if (have[h] == k) { dup = true; break; }
         if (dup) { ++skipped; continue; }
+
+        // 同一个动作（同身份、音效路径不同）→ 覆盖已有条目的音效，而不是再加一条。
+        if (importCombo) {
+            std::map<std::string, std::size_t>::iterator it2 = byIdent.find(EntryIdentity(e));
+            if (it2 != byIdent.end()) {
+                SoundEntry& dst = im->cfg.entries[it2->second];
+                dst.def = e.def;
+                dst.gauge[0] = e.gauge[0]; dst.gauge[1] = e.gauge[1];
+                dst.gauge[2] = e.gauge[2]; dst.gauge[3] = e.gauge[3];
+                dst.charge[0] = e.charge[0]; dst.charge[1] = e.charge[1];
+                dst.charge[2] = e.charge[2]; dst.charge[3] = e.charge[3];
+                dst.conds = e.conds;
+                dst.stop = e.stop;
+                dst.group = e.group;
+                dst.checkDelayMs = e.checkDelayMs;
+                dst.checkTimeoutMs = e.checkTimeoutMs;
+                dst.endOnAction = e.endOnAction;
+                dst.checkMode = e.checkMode;
+                dst.judgePreset = e.judgePreset;
+                dst.checkOffsetMs = e.checkOffsetMs;
+                dst.enabled = e.enabled;
+                ++updated;
+                continue;
+            }
+        }
+
         im->cfg.entries.push_back(e);
         have.push_back(EntryKey(im->cfg.entries.back()));
+        if (importCombo) byIdent[EntryIdentity(im->cfg.entries.back())] = im->cfg.entries.size() - 1;
         ++added;
     }
-    if (added > 0) im->dirty = true;
+    if (added > 0 || updated > 0) im->dirty = true;
 
     std::string extra;
     if (sndCopied > 0)
         extra = "；音效已按组合归到 sounds\\<组合名>\\（复制 " + std::to_string(sndCopied) + " 个）";
     if (sndMissing > 0)
         extra += "；有 " + std::to_string(sndMissing) + " 个音效在包里没找到，路径保持原样";
-    im->SetStatus("导入配置: 新增 " + std::to_string(added) + " 条，跳过重复 " +
-                  std::to_string(skipped) + " 条" + extra);
+    im->SetStatus("导入配置: 新增 " + std::to_string(added) + " 条" +
+                  (updated > 0 ? "，更新同动作 " + std::to_string(updated) + " 条" : std::string()) +
+                  "，跳过重复 " + std::to_string(skipped) + " 条" + extra);
 
     // 导入出新组合时自动把对应武器的当前组合切过去：否则条目落在"非激活组合"里，
     // 列表和游戏里都看不到，用户会以为没导入成功。
@@ -4260,6 +4308,7 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
     im->status += "（记得保存再重载游戏配置生效）";
 
     res.set("added", JVal(added));
+    res.set("updated", JVal(updated));
     res.set("skipped", JVal(skipped));
     res.set("relocated", JVal(relocated));
     res.set("soundCopied", JVal(sndCopied));
@@ -5680,8 +5729,11 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 return OkJson(d);
             }
 
-            // 暂存目录：先把音效复制到 <暂存>\sounds\，再打进 zip，收尾删掉
-            const std::string stage = TempSubDir("wse_export");
+            // 暂存目录：先把音效复制到 <暂存>\sounds\，再打进 zip，收尾删掉。
+            // ★ 放在数据目录的 wemkit\tmp 下，不用 %TEMP%：有些机器上杀软/权限策略
+            //   会拒绝往用户的 Temp 里新建目录（实测管理员权限运行时 CreateDirectoryW
+            //   直接返回 5 拒绝访问），导出/导入会莫名其妙失败。
+            const std::string stage = im->BaseDir() + "wemkit\\tmp\\wse_export\\";
             DeleteTree(Utf8ToWide(stage));
             MakeDirs(Utf8ToWide(stage));
 
@@ -5721,9 +5773,10 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
 
         if (method == "combo.import") {
             std::vector<std::string> one;
-            const std::string sp = OpenFileDialog(
+            const std::string given = ToBack(Trim(p.optStr("path")));
+            const std::string sp = given.empty() ? OpenFileDialog(
                 owner, L"组合文件 (*.zip;*.txt;*.ini)\0*.zip;*.txt;*.ini\0所有文件 (*.*)\0*.*\0",
-                nullptr, nullptr, false, one);
+                nullptr, nullptr, false, one) : given;
             if (sp.empty()) {
                 JVal d = JVal::obj();
                 d.set("added", JVal(0));
@@ -5737,8 +5790,9 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 r.set("path", JVal(ToSlash(sp)));
                 return OkJson(r);
             }
-            // zip：解包到临时目录，取出组合 txt 再走普通合并（旁边的 sounds\ 会自动复制进本地）
-            const std::string ext = TempSubDir("wse_import");
+            // zip：解包到暂存目录，取出组合 txt 再走普通合并（旁边的 sounds\ 会自动复制进本地）
+            // 同导出：不用 %TEMP%（有些机器不允许在那里新建目录 → 解包全失败 → "读取失败"）
+            const std::string ext = im->BaseDir() + "wemkit\\tmp\\wse_import\\";
             DeleteTree(Utf8ToWide(ext));
             MakeDirs(Utf8ToWide(ext));
             const std::string found = ZipExtractTo(LongPathW(sp), ext);
@@ -5756,6 +5810,43 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
         }
 
         // ---------------- 游戏交互 ----------------
+        // 诊断：内存里的条目按组合分布（条目数 / 带条件池的条数 / 同名同动作重复条数）
+        //   排查"我导出的包和别人导入后看到的不一样"时先看这个：导出只取当前组合。
+        if (method == "diag.combos") {
+            std::map<std::string, int> counts, conds, dups;
+            std::map<std::string, int> tuples;
+            for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
+                const SoundEntry& e = im->cfg.entries[i];
+                const std::string k = std::to_string(e.weaponType) + "|" + e.combo;
+                counts[k] += 1;
+                if (!e.conds.empty()) conds[k] += 1;
+                std::string lmt;
+                for (std::size_t j = 0; j < e.lmt.size(); ++j) {
+                    if (j) lmt += ",";
+                    lmt += std::to_string(e.lmt[j]);
+                }
+                tuples[k + "|" + e.name + "|" + lmt + "|" + std::to_string(e.fsmId)] += 1;
+            }
+            for (std::map<std::string, int>::iterator it = tuples.begin(); it != tuples.end(); ++it) {
+                if (it->second <= 1) continue;
+                const std::size_t p2 = it->first.find('|', it->first.find('|') + 1);
+                const std::string k = (p2 == std::string::npos) ? it->first : it->first.substr(0, p2);
+                dups[k] += it->second - 1;
+            }
+            JVal arr = JVal::arr();
+            for (std::map<std::string, int>::iterator it = counts.begin(); it != counts.end(); ++it) {
+                JVal o = JVal::obj();
+                o.set("key", JVal(it->first));
+                o.set("n", JVal(it->second));
+                o.set("conds", JVal(conds[it->first]));
+                o.set("dups", JVal(dups[it->first]));
+                arr.push(o);
+            }
+            JVal d = JVal::obj();
+            d.set("total", JVal((int)im->cfg.entries.size()));
+            d.set("combos", arr);
+            return OkJson(d);
+        }
         // 诊断：GUI 到底在读哪份 wem 日志 / 哪个场景目录（排查"没有 wem / 场景未知"）
         if (method == "wem.diag") {
             JVal d = JVal::obj();
