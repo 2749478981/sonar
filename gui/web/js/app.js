@@ -518,7 +518,7 @@ function displayName(e) {
 function entrySounds(e) {
   const out = [];
   (e.def || []).forEach(s => out.push(s));
-  (e.voice || []).forEach(s => out.push(s));
+  (e.extras || []).forEach(x => (x.pool || []).forEach(s => out.push(s)));
   (e.conds || []).forEach(c => (c.pool || []).forEach(s => out.push(s)));
   return out;
 }
@@ -544,7 +544,7 @@ function soundSummary(e) {
     detail: `默认 ${(e.def || []).length} 条`
           + (conds ? ` · 判定条件 ${conds} 个（共 ${condSounds} 条）` : '')
           + (gaugeSounds ? ` · 刃时 ${gaugeSounds} 条` : '')
-          + ((e.voice || []).length ? ` · 语音 ${(e.voice || []).length} 条` : ''),
+          + (((e.extras || []).reduce((n, x) => n + ((x.pool || []).length), 0)) ? ` · 附加 ${(e.extras || []).reduce((n, x) => n + ((x.pool || []).length), 0)} 条` : ''),
   };
 }
 function firstLmt(e) { return e.lmtAny || !e.lmt || !e.lmt.length ? -1 : e.lmt[0]; }
@@ -900,7 +900,7 @@ async function captureToEntry(r) {
     combo: w >= 0 ? (ST.active[w] || '') : '',
     fsmId: fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], voice: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -948,7 +948,7 @@ async function addWemRecord(r) {
     name: wemSeq(r) || wemBank(r) || ('media ' + media), weaponType: w, combo,
     media: media, bank: r.bank || '', fsmId: -1, fsmTarget: -1, group: '', stop: false,
     lmt: [], lmtAny: false,   // 不限不勾选：wem 条目可以填 LMT 作为附加条件
-    def: [], voice: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -1125,7 +1125,7 @@ const JUDGE_FALLBACK = [
 function blankEntry() {
   return { name: '', weaponType: ST.weaponFilter >= 0 ? ST.weaponFilter : -1, combo: '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
-    def: [], voice: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [] };
 }
@@ -1577,7 +1577,7 @@ function buildPools(box, e) {
   poolSeq = 0;   // 每次渲染重新分配配色
   e.gauge = e.gauge || [[], [], [], []];
   e.charge = e.charge || [[], [], [], []];
-  e.voice = e.voice || [];
+  e.extras = e.extras || [];
 
   const pool = (title, arr, key, canRemove) => {
     const openKey = key;
@@ -1615,8 +1615,20 @@ function buildPools(box, e) {
 
   $('#edDefHead').textContent = isLS ? '默认音效（任意刃时）' : '默认音效';
   pool('默认音效', e.def, 'def', true);
-  box.appendChild(h('div', { class: 'sect' }, '语音（可选：和上面的音效各抽一条，同一瞬间一起响）'));
-  pool('语音', e.voice, 'voice', true);
+  box.appendChild(h('div', { class: 'sect' }, '附加音效池（每个池各抽一条，和上面的音效同时响 —— 用来做「音效类1 + 音效类2」这种）'));
+  (e.extras || []).forEach((xp, i) => {
+    const nome = h('input', { type: 'text', value: xp.name || ('音效类' + (i + 2)), title: '这个池的名字（只是显示用）', style: 'width:130px' });
+    nome.oninput = () => { xp.name = nome.value; };
+    const delPool = h('button', { class: 'del', title: '删掉这个池（连同里面的音效）', onclick: () => { e.extras.splice(i, 1); fillPools(); } }, '删除池');
+    box.appendChild(h('div', { class: 'addrow', style: 'margin-top:10px' }, nome, delPool));
+    pool(xp.name || ('音效类' + (i + 2)), xp.pool, 'x' + i, true);
+  });
+  box.appendChild(h('div', { class: 'addrow' },
+    h('button', { title: '再加一个并列的池：触发时它也会各抽一条一起响', onclick: () => {
+      if (!e.extras) e.extras = [];
+      e.extras.push({ name: '音效类' + (e.extras.length + 2), pool: [] });
+      fillPools();
+    } }, '+ 再加一个音效池')));
 
   if (isLS && ED.adv) {
     box.appendChild(h('div', { class: 'sect' }, '刃时音效（太刀专用，未配置的刃色回退默认音效）'));
@@ -1763,7 +1775,7 @@ async function addFsmToCombo(row) {
     name: row.name || ('fsm ' + row.fsm), weaponType: row.weapon, combo,
     fsmId: row.fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], voice: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };

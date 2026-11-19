@@ -168,6 +168,17 @@ std::uint64_t ParsePlayerRoot(const std::string& s, std::uint64_t defval) {
     return static_cast<std::uint64_t>(hv);
 }
 
+// 取/建第 n 个附加音效池（2 = Sound2=，3 = Sound3= …；Voice= 等同 2）
+static PoolSpec& ExtraPoolAt(SoundEntry& e, int n) {
+    if (n < 2) n = 2;
+    while ((int)e.extras.size() < n - 1) {
+        ExtraPoolSpec x;
+        x.name = "音效类" + std::to_string((int)e.extras.size() + 2);
+        e.extras.push_back(x);
+    }
+    return e.extras[(std::size_t)(n - 2)].pool;
+}
+
 static int ClampInt(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 bool LoadConfig(const std::string& path, Config& cfg) {
@@ -399,7 +410,18 @@ bool LoadConfig(const std::string& path, Config& cfg) {
         } else if (key == "Sound") {
             AppendSpecs(cur.def, val, plainOrder);
         } else if (key == "Voice") {
-            AppendSpecs(cur.voice, val, plainOrder);
+            // 旧写法：Voice= 就是第二个附加池（= Sound2=）
+            AppendSpecs(ExtraPoolAt(cur, 2), val, plainOrder);
+        } else if (key.size() == 6 && key.compare(0, 5, "Sound") == 0 &&
+                   key[5] >= '2' && key[5] <= '9') {
+            // Sound2= … Sound9=：附加音效池（各抽一条，同时播）
+            AppendSpecs(ExtraPoolAt(cur, key[5] - '0'), val, plainOrder);
+        } else if (key.size() == 5 && key.compare(0, 4, "Name") == 0 &&
+                   key[4] >= '2' && key[4] <= '9') {
+            // Name2= …：附加池的显示名（如"音效类2"/"语音"）
+            const int n = key[4] - '0';
+            ExtraPoolAt(cur, n);
+            cur.extras[(std::size_t)(n - 2)].name = Trim(val);
         } else if ((key.size() > 6 && key.compare(0, 6, "Sound:") == 0 &&
                     key.find_first_of("<>=!&|", 6) != std::string::npos) ||
                    (key.size() > 9 && key.compare(0, 9, "SoundEnd:") == 0)) {
@@ -511,7 +533,15 @@ static void WriteEntry(const SoundEntry& e, int n, std::string& o) {
         }
     }
     WritePool(e.def, "Sound", o);
-    WritePool(e.voice, "Voice", o);
+    for (std::size_t i = 0; i < e.extras.size(); ++i) {
+        const int n = (int)i + 2;
+        const std::string sk = "Sound" + std::to_string(n);
+        WritePool(e.extras[i].pool, sk.c_str(), o);
+        if (!e.extras[i].name.empty()) {
+            const std::string nk = "Name" + std::to_string(n);
+            o += nk + "=" + e.extras[i].name + "\r\n";
+        }
+    }
     for (int i = 0; i < 4; ++i) {
         std::string k = std::string("Sound:") + GaugeTagName(i);
         WritePool(e.gauge[i], k.c_str(), o);

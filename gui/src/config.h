@@ -27,6 +27,14 @@ struct CondSpec {
     PoolSpec pool;
 };
 
+// 附加音效池（Sound2= / Name2= …）：一条条目可以有多个并列的池，
+// 每个池在触发时各随机抽一条、同时播放。用来表达"音效类1 + 音效类2"这种
+// 同一瞬间要响多个不同类别声音的配置（以前只能拆成好几条条目）。
+struct ExtraPoolSpec {
+    std::string name;           // 显示名（Name2=，可为空 → 默认"音效类N"）
+    PoolSpec pool;
+};
+
 // 一条派生攻击音效条目
 struct SoundEntry {
     int weaponType = -1;        // 0..13，-1 = 任意武器
@@ -56,7 +64,7 @@ struct SoundEntry {
     //   所以"开红刃放 BGM"只要一条。0 = 普通条目。
     int gaugeRise = 0;
     PoolSpec def;               // 默认音效（Sound=）；启用判定时它是"都不成立"的兜底池
-    PoolSpec voice;             // 语音（Voice=）：和 def 各抽各的，同一次触发同时响一条音效 + 一条语音
+    std::vector<ExtraPoolSpec> extras;   // 附加音效池（Sound2=…）：各抽一条，和 def 一起响
     PoolSpec gauge[4];          // 刃时音效 0..3（无/白/黄/红；Sound:none|white|yellow|red）
     PoolSpec charge[4];         // 蓄力等级音效 0..3（大剑/弓/锤；Sound:charge0..3，1=蓄力1段…3=蓄满）
 

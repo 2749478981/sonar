@@ -1704,7 +1704,14 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     v.set("lmtAny", e.lmt.empty());
 
     v.set("def", PoolToJson(e.def));
-    v.set("voice", PoolToJson(e.voice));
+    JVal jextras = JVal::arr();
+    for (std::size_t i = 0; i < e.extras.size(); ++i) {
+        JVal xo = JVal::obj();
+        xo.set("name", JVal(e.extras[i].name));
+        xo.set("pool", PoolToJson(e.extras[i].pool));
+        jextras.push(xo);
+    }
+    v.set("extras", jextras);
     JVal g = JVal::arr();
     for (int i = 0; i < 4; ++i) g.push(PoolToJson(e.gauge[i]));
     v.set("gauge", g);
@@ -1732,7 +1739,7 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     int n = (int)e.def.specs.size();
     for (int i = 0; i < 4; ++i) n += (int)e.gauge[i].specs.size();
     for (int i = 0; i < 4; ++i) n += (int)e.charge[i].specs.size();
-    n += (int)e.voice.specs.size();
+    for (std::size_t i = 0; i < e.extras.size(); ++i) n += (int)e.extras[i].pool.specs.size();
     for (std::size_t i = 0; i < e.conds.size(); ++i) n += (int)e.conds[i].pool.specs.size();
     v.set("soundCount", JVal(n));
     return v;
@@ -1825,8 +1832,18 @@ SoundEntry EntryFromJson(const JVal& v, const std::vector<std::string>& allowedC
 
     const JVal* jdef = v.find("def");
     if (jdef) PoolFromJson(*jdef, e.def);
-    const JVal* jvoice = v.find("voice");
-    if (jvoice) PoolFromJson(*jvoice, e.voice);
+    const JVal* jx = v.find("extras");
+    if (jx && jx->isArr()) {
+        e.extras.clear();
+        for (std::size_t i = 0; i < jx->a.size(); ++i) {
+            const JVal& xo = jx->a[i];
+            ExtraPoolSpec xs;
+            xs.name = xo.optStr("name");
+            const JVal* xp = xo.find("pool");
+            if (xp) PoolFromJson(*xp, xs.pool);
+            e.extras.push_back(xs);
+        }
+    }
     const JVal* jg = v.find("gauge");
     if (jg && jg->isArr()) {
         for (int i = 0; i < 4 && i < (int)jg->a.size(); ++i) PoolFromJson(jg->a[i], e.gauge[i]);
@@ -1881,7 +1898,8 @@ std::string EntryKey(const SoundEntry& e) {
     for (std::size_t i = 0; i < e.lmt.size(); ++i) k += std::to_string(e.lmt[i]) + ",";
     k += "|";
     for (std::size_t i = 0; i < e.def.specs.size(); ++i) k += e.def.specs[i].path + ";";
-    for (std::size_t i = 0; i < e.voice.specs.size(); ++i) k += e.voice.specs[i].path + ";";
+    for (std::size_t x = 0; x < e.extras.size(); ++x)
+        for (std::size_t i = 0; i < e.extras[x].pool.specs.size(); ++i) k += e.extras[x].pool.specs[i].path + ";";
     for (int i = 0; i < 4; ++i)
         for (std::size_t j = 0; j < e.gauge[i].specs.size(); ++j) k += e.gauge[i].specs[j].path + ";";
     for (int i = 0; i < 4; ++i)
@@ -4007,7 +4025,7 @@ bool PackComboToDir(void* corePtr, int w, const std::string& combo, const std::s
         // 四个池 + 条件池统一改写
         std::vector<std::vector<SoundSpec>*> pools;
         pools.push_back(&c2.def.specs);
-        pools.push_back(&c2.voice.specs);
+        for (std::size_t x = 0; x < c2.extras.size(); ++x) pools.push_back(&c2.extras[x].pool.specs);
         for (int g = 0; g < 4; ++g) pools.push_back(&c2.gauge[g].specs);
         for (int g = 0; g < 4; ++g) pools.push_back(&c2.charge[g].specs);
         for (std::size_t ci = 0; ci < c2.conds.size(); ++ci) pools.push_back(&c2.conds[ci].pool.specs);
@@ -4195,7 +4213,7 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
             const std::wstring dstDirW = Utf8ToWide(im->BaseDir() + "sounds\\" + folder + "\\");
             std::vector<std::vector<SoundSpec>*> pools;
             pools.push_back(&e.def.specs);
-        pools.push_back(&e.voice.specs);
+        for (std::size_t x = 0; x < e.extras.size(); ++x) pools.push_back(&e.extras[x].pool.specs);
             for (int g = 0; g < 4; ++g) pools.push_back(&e.gauge[g].specs);
             for (int g = 0; g < 4; ++g) pools.push_back(&e.charge[g].specs);
             for (std::size_t ci = 0; ci < e.conds.size(); ++ci) pools.push_back(&e.conds[ci].pool.specs);
@@ -4683,8 +4701,9 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                     if (!hit) {
                         for (std::size_t k = 0; k < e.def.specs.size() && !hit; ++k)
                             if (ToLowerAscii(e.def.specs[k].path).find(q) != std::string::npos) hit = true;
-                        for (std::size_t k = 0; k < e.voice.specs.size() && !hit; ++k)
-                            if (ToLowerAscii(e.voice.specs[k].path).find(q) != std::string::npos) hit = true;
+                        for (std::size_t x = 0; x < e.extras.size() && !hit; ++x)
+                            for (std::size_t k = 0; k < e.extras[x].pool.specs.size() && !hit; ++k)
+                                if (ToLowerAscii(e.extras[x].pool.specs[k].path).find(q) != std::string::npos) hit = true;
                     }
                     if (!hit && WeaponName(e.weaponType) &&
                         ToLowerAscii(WeaponName(e.weaponType)).find(q) != std::string::npos) hit = true;
@@ -4854,7 +4873,15 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 if (it == firstIdx.end()) { firstIdx[k] = out.size(); out.push_back(e); continue; }
                 SoundEntry& keep = out[it->second];
                 addPool(keep.def, e.def);
-                addPool(keep.voice, e.voice);
+                for (std::size_t x = 0; x < e.extras.size(); ++x) {
+                bool merged = false;
+                for (std::size_t y = 0; y < keep.extras.size() && !merged; ++y) {
+                    if (keep.extras[y].name != e.extras[x].name) continue;
+                    addPool(keep.extras[y].pool, e.extras[x].pool);
+                    merged = true;
+                }
+                if (!merged) keep.extras.push_back(e.extras[x]);
+            }
                 for (int g = 0; g < 4; ++g) addPool(keep.gauge[g], e.gauge[g]);
                 for (int g = 0; g < 4; ++g) addPool(keep.charge[g], e.charge[g]);
                 for (std::size_t c = 0; c < e.conds.size(); ++c) {
@@ -4913,7 +4940,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {
                 const SoundEntry& e = im->cfg.entries[i];
                 if (w >= 0 && e.weaponType != w) continue;
-                const bool hasSound = !e.def.empty() || !e.voice.empty() || !e.gauge[0].empty() || !e.gauge[1].empty() ||
+                const bool hasSound = !e.def.empty() || !e.extras.empty() || !e.gauge[0].empty() || !e.gauge[1].empty() ||
                                       !e.gauge[2].empty() || !e.gauge[3].empty() ||
                                       !e.charge[0].empty() || !e.charge[1].empty() ||
                                       !e.charge[2].empty() || !e.charge[3].empty() ||
@@ -4922,8 +4949,11 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                     ++noSound;
                     if (noSound <= 3) { if (!noSoundNames.empty()) noSoundNames += "、"; noSoundNames += e.name.empty() ? ("#" + std::to_string(i)) : e.name; }
                 }
-                for (int poolIdx = 0; poolIdx < 2; ++poolIdx) {
-                    const PoolSpec& chkPool = (poolIdx == 0) ? e.def : e.voice;
+                std::vector<const PoolSpec*> chkPools;
+                chkPools.push_back(&e.def);
+                for (std::size_t x = 0; x < e.extras.size(); ++x) chkPools.push_back(&e.extras[x].pool);
+                for (std::size_t poolIdx = 0; poolIdx < chkPools.size(); ++poolIdx) {
+                    const PoolSpec& chkPool = *chkPools[poolIdx];
                     for (std::size_t s = 0; s < chkPool.specs.size(); ++s) {
                         const std::string abs = Utf8FromWide(ResolveAudioDisk(im, chkPool.specs[s].path));
                         if (!FsExists(abs)) {
@@ -5442,7 +5472,10 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             };
             pickPool(*pool, picked);
             // 语音池单独抽一条一起放：游戏里两者就是各抽各的、同时响
-            if (pool != &e.voice && !e.voice.empty()) pickPool(e.voice, picked);
+            for (std::size_t x = 0; x < e.extras.size(); ++x) {
+            if (pool == &e.extras[x].pool) continue;
+            if (!e.extras[x].pool.empty()) pickPool(e.extras[x].pool, picked);
+        }
             if (picked.empty()) return ErrJson("这条还没有音效");
 
             StopAllPreview();   // 只在这里停一次；下面几条要叠在一起播（整体效果）
@@ -5799,7 +5832,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 const std::string k = std::to_string(e.weaponType) + "|" + e.combo;
                 counts[k] += 1;
                 if (!e.conds.empty()) conds[k] += 1;
-                if (!e.voice.empty()) voices[k] += 1;
+                if (!e.extras.empty()) voices[k] += 1;
                 std::string lmt;
                 for (std::size_t j = 0; j < e.lmt.size(); ++j) {
                     if (j) lmt += ",";

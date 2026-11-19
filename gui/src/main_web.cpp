@@ -1076,6 +1076,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
             if (::GetEnvironmentVariableW(L"WSE_STATS", st, 8) > 0 && st[0] == L'1')
                 LogLine("stats: %s", g_core.Handle("diag.combos", "{}").c_str());
         }
+
         // 设置 WSE_IMPORT=<zip|txt> 启动时跑一次组合导入（自动化验证用；正常用户走界面按钮）
         {
             wchar_t buf[1024] = {};
