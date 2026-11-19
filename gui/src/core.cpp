@@ -5698,7 +5698,8 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             }
             fname += ".zip";
 
-            const std::string zipPath = SaveFileDialog(
+            std::string zipPath = Trim(p.optStr("path"));   // 自动化/脚本可直接给路径
+            if (zipPath.empty()) zipPath = SaveFileDialog(
                 owner, L"组合包 (*.zip)\0*.zip\0所有文件 (*.*)\0*.*\0", L"zip",
                 Utf8ToWide(fname));
             if (zipPath.empty()) {
