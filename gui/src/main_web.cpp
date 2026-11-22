@@ -502,12 +502,19 @@ void ResizeWebView() {
     RECT rc = {};
     ::GetClientRect(g_hwnd, &rc);
     g_ctrl->put_Bounds(rc);
-    // 只在尺寸变化时记一行，方便对比"窗口多大 / 实际给 WebView 多大"
+    // 只在尺寸变化时记一行：物理像素客户区（÷ 系统缩放 = WebView 的 CSS 视口宽度）
     static long lw = -1, lh = -1;
     const long w = rc.right - rc.left, h = rc.bottom - rc.top;
     if (w != lw || h != lh) {
         lw = w; lh = h;
-        LogLine("resize: client=%ldx%ld", w, h);
+        UINT dpi = 96;
+        HMODULE u32d = ::GetModuleHandleW(L"user32.dll");
+        if (u32d) {
+            typedef UINT(WINAPI* PFN_GetDpiForWindow)(HWND);
+            auto gdw = (PFN_GetDpiForWindow)::GetProcAddress(u32d, "GetDpiForWindow");
+            if (gdw) dpi = gdw(g_hwnd);
+        }
+        LogLine("resize: client=%ldx%ld dpi=%u", w, h, dpi);
     }
 }
 
@@ -598,6 +605,19 @@ void ProbePage() {
         L"logoOk:(logo?logo.naturalWidth>0:null),"
         L"capType:(typeof Capture),api:apiInfo,hosts:hosts.length,capRows:cm+'/'+cb,view:view,"
         L"layout:layout,wemView:wemView,capStat:(stat?stat.textContent:''),capFilter:(filt?filt.textContent:''),"
+        // 版式自检：页面是否比窗口大（overflow 时右侧/底部会被切掉、滚动条又被播放条压住）
+        L"docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,"
+        L"appW:(document.querySelector('.app')?document.querySelector('.app').scrollWidth:0),"
+        L"appH:(document.querySelector('.app')?document.querySelector('.app').scrollHeight:0),"
+        L"bankBox:(function(){var t=document.querySelector('.banktable');return t?(t.offsetWidth+'x'+t.offsetHeight+'/s'+t.scrollHeight):'none';})(),"
+        // 三栏实际落点（怀疑被切时看这组数：右栏 right 是否 <= innerWidth）
+        L"colRects:(function(){var o=[];['.rail','.center','.capture'].forEach(function(s){var e=document.querySelector('#mainBank '+s)||document.querySelector(s);if(!e){o.push(s+':none');return;}var r=e.getBoundingClientRect();o.push(s+':'+Math.round(r.left)+','+Math.round(r.right)+'x'+Math.round(r.width));});return o.join(' ');})(),"
+        L"docTitle:document.title,"
+        // DPI / 越界自检：找出真正超出视口的元素（右/下被切掉就是它）
+        L"dpr:window.devicePixelRatio,clientW:document.documentElement.clientWidth,clientH:document.documentElement.clientHeight,"
+        L"maxRight:(function(){var m=0,n='';document.querySelectorAll('body *').forEach(function(e){var r=e.getBoundingClientRect();if(r.width>0&&r.right>m){m=r.right;n=(e.className&&String(e.className).split(' ')[0])||e.tagName;}});return Math.round(m)+' '+n;})(),"
+        // 播放条是否压住列表最后一行：pvTop 应 >= 表格 bottom
+        L"pvCheck:(function(){var pv=document.getElementById('pvBar');var t=document.querySelector('#mainBank .banktable')||document.querySelector('.banktable');if(!t)return 'noTable';var tr=t.getBoundingClientRect();if(!pv||pv.hidden)return 'pvHidden tBottom'+Math.round(tr.bottom);var pr=pv.getBoundingClientRect();return 'pvTop'+Math.round(pr.top)+' tBottom'+Math.round(tr.bottom)+(Math.round(pr.top)<Math.round(tr.bottom)-1?' OVERLAP':' ok');})(),"
         L"capText:ct,dllWarn:dwS,thCols:etc,rowCols:erc,weaponColHidden:ehw,weaponOn:wOn+'/'+wsw.length,weaponOffRows:wOff+'/'+wOffX,bank:bank,"
         // 升刃条目自检：徽标数（后端 gaugeRise 是否传到前端）+ 触发方式下拉的选项数（HTML 是否更新）
         L"gauge:document.querySelectorAll('.badge.gauge').length,"
@@ -884,6 +904,32 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ::SetTimer(hwnd, 5, 15000, nullptr);
                 ProbePage();
             } else if (wp == 5) {
+                ProbePage();
+            } else if (wp == 9) {
+                // 自动化验证：页面就绪后自动试听一次（看播放条出现后有没有压住列表）
+                ::KillTimer(hwnd, 9);
+                wchar_t pb2[1024] = {};
+                if (g_web && ::GetEnvironmentVariableW(L"WSE_PLAY", pb2, 1024) > 0 && pb2[0]) {
+                    std::string playPath = WideToUtf8(std::wstring(pb2));
+                    std::string playEsc;
+                    for (char ch : playPath) { if (ch == '\\' || ch == '\'') playEsc += '\\'; playEsc += ch; }
+                    std::string js = "try{(window.SonarAPI?window.SonarAPI.Backend:Backend).call('sound.preview',{path:'";
+                    js += playEsc;
+                    js += "'}).then(function(r){document.title='PV '+JSON.stringify(r);"
+                          "setTimeout(function(){(window.SonarAPI?window.SonarAPI.Backend:Backend).call('sound.previewState',{}).then(function(s){document.title='PS '+JSON.stringify(s);});},1200);})"
+                          ".catch(function(e){document.title='PVERR '+(e&&e.message?e.message:e);});}catch(e){document.title='PVEX '+e.message;}";
+                    // 带上结果回执：注入失败（SonarAPI 还没导出等）要能在日志里看见，而不是静默
+                    g_web->ExecuteScript(Utf8ToWide(js).c_str(),
+                        Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                            [](HRESULT hr, LPCWSTR result) -> HRESULT {
+                                LogLine("playx: hr=0x%08lX r=%s", (unsigned long)hr,
+                                    result ? WideToUtf8(std::wstring(result)).c_str() : "(null)");
+                                return S_OK;
+                            }).Get());
+                    ::SetTimer(hwnd, 10, 1500, nullptr);   // 播起来之后再量一次
+                }
+            } else if (wp == 10) {
+                ::KillTimer(hwnd, 10);
                 ProbePage();
             } else if (wp == 3) {
                 // 兜底：前端一直没发 ui.ready（JS 出错），8 秒后仍把 WebView 放出来，
@@ -1286,7 +1332,27 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                             // ★ WebView 先隐藏：加载画面（主窗口画）保持到网页真正就绪，
                             //   前端发 ui.ready 后才 put_IsVisible(TRUE)，中间不闪空。
                             g_ctrl->put_IsVisible(FALSE);
-                            g_web->Navigate(L"https://sonar.local/web/index.html");
+                            // 自动化验证用：WSE_BANKUI=<nbnk/npck 路径> 时直接打开音效包页并载入它
+                            //   （正常用户走界面按钮；这里只为脚本化截图/自检服务）
+                            {
+                                wchar_t bt[1024] = {};
+                                std::wstring url = L"https://sonar.local/web/index.html";
+                                if (::GetEnvironmentVariableW(L"WSE_BANKUI", bt, 1024) > 0 && bt[0]) {
+                                    url += L"#bankui=";
+                                    url += bt;
+                                    LogLine("bankui: %s", WideToUtf8(std::wstring(bt)).c_str());
+                                }
+                                g_web->Navigate(url.c_str());
+                            }
+                            // 自动化验证用：WSE_PLAY=<音频路径> 时页面就绪后自动试听一次，
+                            //   用来检查底部播放条出现后会不会压住列表最后一行（正常用户点播放按钮）。
+                            {
+                                wchar_t pb2[1024] = {};
+                                if (::GetEnvironmentVariableW(L"WSE_PLAY", pb2, 1024) > 0 && pb2[0]) {
+                                    SetTimer(g_hwnd, 9, 3500, nullptr);
+                                    LogLine("play: %s", WideToUtf8(std::wstring(pb2)).c_str());
+                                }
+                            }
                             // 兜底定时器：8 秒内前端没发 ui.ready 就把 WebView 放出来
                             ::SetTimer(g_hwnd, 3, 8000, nullptr);
                             g_ready = false;

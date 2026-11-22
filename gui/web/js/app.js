@@ -964,7 +964,22 @@ async function addWemRecord(r) {
    音效替换（nbnk Mod，实验性）
    流程：导入 nbnk → 为某个 media 选音频 → 转 wem（ffmpeg+Wwise）→ 替换进 bank → 导出
    =========================================================================== */
-const BANK = { path: '', name: '', media: [], reps: {}, histSaved: false };   // histSaved: 本次替换是否已写进记录   // reps: mediaId -> 音频路径
+const BANK = { path: '', name: '', media: [], reps: {}, histSaved: false };   // histSaved: 本次替换是否已写进记录   // reps: mediaId -> { path, vol, delay }（老数据可能是纯路径字符串）
+
+// 每条替换音频：{ path, vol(百分比 0..200), delay(毫秒) }。
+//   老记录（直接存路径字符串）照样能读，按 100% / 0ms 处理。
+function bankRep(id) {
+  const r = BANK.reps[id];
+  if (!r) return null;
+  if (typeof r === 'string') return { path: r, vol: 100, delay: 0 };
+  return {
+    path: r.path || '',
+    vol: (typeof r.vol === 'number' ? r.vol : 100),
+    delay: (typeof r.delay === 'number' ? r.delay : 0),
+  };
+}
+function bankSetRep(id, path) { BANK.reps[id] = { path, vol: 100, delay: 0 }; }
+function bankRepPath(id) { const r = bankRep(id); return r ? r.path : ''; }
 let playingMedia = 0;                                       // 正在 GUI 内播放的 media（0=无）
 let bankQuery = '';                                         // 列表搜索词（名称 / media id / 序号）
 let bankOnlyReplaced = false;                               // 只看已选替换的条目
@@ -1055,39 +1070,77 @@ function renderBank() {
   });
   const show = rows.slice(0, 800);
   show.forEach(m => {
-    const rep = BANK.reps[m.id] || '';
+    const rep = bankRep(m.id);
+    const repPath = rep ? rep.path : '';
     const on = (m.id === playingMedia);
-    tb.appendChild(h('tr', {
-      class: on ? 'on' : '',
+    // ★ 每条 media 占两行：第一行放数据（序号/名称/id/时长/替换为/音量/延时），
+    //   第二行整行放操作按钮（横着排）。以前按钮都挤在最后一列，窗口一窄就竖着堆成好几行，
+    //   既难看又点不准。
+    const dataRow = h('tr', {
+      class: 'brow' + (on ? ' on' : ''),
       title: '双击播放这条 wem（正在播时双击停止）',
-      ondblclick: (ev) => { if (ev.target && ev.target.closest && ev.target.closest('button')) return; playBankMedia(m); },
+      ondblclick: (ev) => { if (ev.target && ev.target.closest && ev.target.closest('button,input')) return; playBankMedia(m); },
     },
       h('td', { class: 'lmt' }, on ? '▶ ' + String(m.seqInBank || m.seq) : String(m.seqInBank || m.seq)),
       h('td', {}, h('span', { class: 'nm', title: m.custom ? m.name : '', text: bankMediaName(m) })),
       h('td', { class: 'fsm', style: 'color:var(--c-blue)' }, String(m.id)),
       h('td', { class: 'lmt', title: `${m.size} 字节` }, bankSizeText(m)),
-      h('td', { title: rep, style: 'max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
-        rep ? rep.split(/[\\/]/).pop() : '—'),
-      h('td', {}, h('div', { class: 'acts' },
-        h('button', { title: '在 GUI 内直接播放这条 wem（底部播放条可拖进度）', onclick: () => playBankMedia(m) }, '播放'),
-        h('button', { title: '停止播放', onclick: async () => {
-          try { await Backend.call('bank.stopPlay', {}); } catch (e) {}
-          playingMedia = 0; renderBank();
-        } }, '停止'),
-        rep ? h('button', { title: '试听你选的替换音频\n' + rep, onclick: async () => {
-          try {
-            const r = await Backend.call('audio.playFile', { path: rep });
-            if (!r.played) toast('替换音播放失败', 'err');
-          } catch (e) { toast('替换音播放失败：' + e.message, 'err'); }
-        } }, '听替换音') : null,
-        h('button', { title: '给这条 wem 起个名字（保存进用户名字库，下次自动读取）', onclick: () => openNameDialog(m.id, m.name) }, '命名'),
-        h('button', { onclick: async () => {
-          const r = await Backend.call('audio.pickMulti', {});
-          if (r.cancelled || !r.files || !r.files.length) return;
-          BANK.reps[m.id] = r.files[0];
-          renderBank();
-        } }, '选音频'),
-        rep ? h('button', { class: 'del', onclick: () => { delete BANK.reps[m.id]; renderBank(); } }, '取消') : null))));
+      h('td', { title: repPath, class: 'repcell' },
+        repPath ? h('span', { class: 'repname', text: repPath.split(/[\\/]/).pop() }) : '—'),
+      // 音量 / 延时：选过替换音频才能改；改完立刻记进 BANK.reps
+      h('td', { class: 'num' }, repPath
+        ? h('input', {
+            class: 'mini-num', type: 'number', min: '0', max: '200', step: '5',
+            title: '音量百分比（100 = 原音量，200 = 两倍；0 等于静音）',
+            value: String(rep.vol),
+            onchange: ev => {
+              let v = parseInt(ev.target.value, 10); if (isNaN(v)) v = 100;
+              v = Math.max(0, Math.min(200, v));
+              ev.target.value = String(v);
+              const s = bankRep(m.id); if (s) s.vol = v;
+              BANK.reps[m.id] = s; renderBankShell();
+            },
+          })
+        : h('span', { class: 'dim' }, '—')),
+      h('td', { class: 'num' }, repPath
+        ? h('input', {
+            class: 'mini-num', type: 'number', min: '0', max: '5000', step: '10',
+            title: '延时（毫秒）：这段音频前面补多少静音',
+            value: String(rep.delay),
+            onchange: ev => {
+              let v = parseInt(ev.target.value, 10); if (isNaN(v)) v = 0;
+              v = Math.max(0, Math.min(5000, v));
+              ev.target.value = String(v);
+              const s = bankRep(m.id); if (s) s.delay = v;
+              BANK.reps[m.id] = s; renderBankShell();
+            },
+          })
+        : h('span', { class: 'dim' }, '—')));
+    const actRow = h('tr', { class: 'bact' + (on ? ' on' : '') },
+      h('td', { colspan: 7 },
+        h('div', { class: 'acts' },
+          h('button', { title: '在 GUI 内直接播放这条 wem（底部播放条可拖进度）', onclick: () => playBankMedia(m) },
+            on ? '停止' : '播放'),
+          repPath ? h('button', { title: '试听你选的替换音频（按当前音量/延时）\n' + repPath, onclick: async () => {
+            try {
+              const r = await Backend.call('sound.preview', { path: repPath, vol: rep.vol, delay: rep.delay });
+              if (!r || !r.played) toast('替换音播放失败', 'err');
+            } catch (e) { toast('替换音播放失败：' + e.message, 'err'); }
+          } }, '听替换音') : null,
+          h('button', { title: '从磁盘选一个音频（wav / mp3 / ogg / flac）', onclick: async () => {
+            const r = await Backend.call('audio.pickMulti', {});
+            if (r.cancelled || !r.files || !r.files.length) return;
+            bankSetRep(m.id, r.files[0]);
+            renderBank();
+          } }, '选音频'),
+          h('button', { title: '从「音效库」里挑（点着试听，选中后填到这一行）', onclick: async () => {
+            await openLib(null, (p) => { bankSetRep(m.id, p); renderBank(); });
+            if (!LIB.files.length) toast('音效库是空的：先点「音效库」导入一个文件夹', 'ok');
+          } }, '音效库'),
+          h('button', { title: '给这条 wem 起个名字（保存进用户名字库，下次自动读取）', onclick: () => openNameDialog(m.id, m.name) }, '命名'),
+          repPath ? h('button', { class: 'del', onclick: () => { delete BANK.reps[m.id]; renderBank(); } }, '取消') : null)));
+    tb.appendChild(dataRow);
+    tb.appendChild(actRow);
   });
   const fc = $('#bankFilterCount');
   if (fc) fc.textContent = (q || bankOnlyReplaced) ? `筛选出 ${rows.length} 条` : '';
@@ -1207,8 +1260,9 @@ function fillEditor() {
     const derivRow = document.querySelector('#edChargeDerivRow');
     const derivSel = document.querySelector('#edChargeDeriv');
     const cutBox = document.querySelector('#edChargeCut');
-    const isChargeWeapon = (e.weaponType === 0);
-    const showDeriv = () => { if (derivRow) derivRow.hidden = !isChargeWeapon || !(e.chargeLevel > 0); };
+    const isChargeWeapon = (e.weaponType === 0 || e.weaponType === 4);   // 大剑 / 大锤
+    const isGs = (e.weaponType === 0);
+    const showDeriv = () => { if (derivRow) derivRow.hidden = !isGs || !(e.chargeLevel > 0); };
     if (chargeRow) chargeRow.hidden = !isChargeWeapon;
     showDeriv();
     if (chargeHint) chargeHint.hidden = !isChargeWeapon;
@@ -1262,7 +1316,7 @@ function fillEditor() {
     e.weaponType = parseInt(ws.value, 10); e.combo = '';
     // 换武器后同步"蓄力等级"行的可用性；不是蓄力武器就清掉等级，避免留下无意义的 ChargeLevel
     // 目前只有大剑的"蓄力等级"偏移是已知的（+0x2358）；弓/锤待实测后再开放
-    const isChargeWeapon = (e.weaponType === 0);
+    const isChargeWeapon = (e.weaponType === 0 || e.weaponType === 4);
     if (!isChargeWeapon) e.chargeLevel = 0;
     const cr = $('#edChargeRow'), ch = $('#edChargeHint'), cs = $('#edCharge');
     if (cr) cr.hidden = !isChargeWeapon;
@@ -1945,7 +1999,7 @@ function refreshUpdate() {
 /* ===========================================================================
    音效库：导入文件夹 → 点一下试听（打断上一条）→ 条目加音效时也能直接选
    =========================================================================== */
-const LIB = { files: [], filter: '', playing: '', pickMode: null, picked: new Set() };
+const LIB = { files: [], filter: '', playing: '', pickMode: null, picked: new Set(), onPick: null };
 
 function libBase(p) { return String(p || '').split(/[\\/]/).pop(); }
 function libDir(p) {
@@ -2028,8 +2082,9 @@ async function libRemove(p) {
 }
 
 // 打开音效库；pickMode 非空时是"从库里给某个池子选音效"
-async function openLib(pickMode) {
+async function openLib(pickMode, onPick) {
   LIB.pickMode = pickMode || null;
+  LIB.onPick = (typeof onPick === 'function') ? onPick : null;
   LIB.picked = new Set();
   await libLoad();
   libRender();
@@ -2249,15 +2304,22 @@ const ACTIONS = {
   },
   'lib.addPicked': async () => {
     const target = LIB.pickMode;
-    if (!target || !LIB.picked.size) { toast('先点几行选中音效', 'err'); return; }
+    const cb = LIB.onPick;
+    if ((!target && !cb) || !LIB.picked.size) { toast('先点几行选中音效', 'err'); return; }
     const paths = Array.from(LIB.picked);
-    // ★ 遍历"选中的路径"（以前误写成遍历 target 自己 → 什么也没加进来）
-    paths.forEach(p => {
-      // 允许同一个文件加多次
+    if (typeof cb === 'function') {
+      // 音效包页这种"选一个填到某一行"的用法：逐个交给回调
+      paths.forEach(p => cb(p));
+      toast('已选：' + paths.length + ' 个音效', 'ok');
+    } else {
+      // ★ 遍历"选中的路径"（以前误写成遍历 target 自己 → 什么也没加进来）
+      paths.forEach(p => {
+        // 允许同一个文件加多次
         target.push({ path: p, delay: 0, vol: 100, fixed: false, cdMs: 0, playLock: false });
-    });
-    toast('已加入 ' + paths.length + ' 个音效', 'ok');
-    LIB.pickMode = null; LIB.picked = new Set();
+      });
+      toast('已加入 ' + paths.length + ' 个音效', 'ok');
+    }
+    LIB.pickMode = null; LIB.onPick = null; LIB.picked = new Set();
     closeModals();
     fillPools();
   },
@@ -2442,8 +2504,10 @@ function showBankPage(on) {
 
 // ---------------- nbnk 替换记录：导入时显示 / 恢复，导出后记住 ----------------
 function bankRepsToArr() {
-  return Object.keys(BANK.reps).map(k => ({ media: parseInt(k, 10), wem: BANK.reps[k] }))
-                                        .filter(x => x.media > 0 && x.wem);
+  return Object.keys(BANK.reps).map(k => {
+    const r = bankRep(k) || { path: '', vol: 100, delay: 0 };
+    return { media: parseInt(k, 10), wem: r.path, vol: r.vol, delay: r.delay };
+  }).filter(x => x.media > 0 && x.wem);
 }
 // ★ 说明行右侧的按钮/复选框：点它们时不要折叠 <details>。
 //   注意不能在上层用 stopPropagation —— 捕获阶段 stop 会让按钮自己的 onclick 收不到事件（实测"点了没反应"）。
@@ -2474,7 +2538,15 @@ async function bankShowHistory() {
     btn.title = h.reps.map(x => x.media + ' → ' + x.wem).join('\n');
     btn.onclick = () => {
       BANK.reps = {};
-      (h.reps || []).forEach(x => { if (x.media > 0 && x.wem) BANK.reps[x.media] = x.wem; });
+      (h.reps || []).forEach(x => {
+        if (x.media > 0 && x.wem) {
+          BANK.reps[x.media] = {
+            path: x.wem,
+            vol: (typeof x.vol === 'number' ? x.vol : 100),
+            delay: (typeof x.delay === 'number' ? x.delay : 0),
+          };
+        }
+      });
       BANK.histSaved = true;
       renderBank();
       toast(`已恢复 ${n} 个替换（文件不在的会转换时报错，可重新选音频）`, 'ok');
@@ -2643,12 +2715,12 @@ ACTIONS['bank.pickOutDir'] = async () => {
   } catch (e) { toast('选择目录失败：' + e.message, 'err'); }
 };
 
-ACTIONS['bank.pick'] = async () => {
-  const r = await Backend.call('bank.pick', {});
-  if (r.cancelled || !r.path) return;
+// 载入一个 bank（bank.pick 拿到路径后走这里；测试脚本也能直接用 window.__openBank 调）
+async function openBankPath(path) {
+  if (!path) return;
   try {
-    const info = await Backend.call('bank.inspect', { path: r.path });
-    BANK.path = r.path;
+    const info = await Backend.call('bank.inspect', { path });
+    BANK.path = path;
     BANK.name = info.bank;
     BANK.ext = info.ext || 'nbnk';        // npck = Wwise 文件包；导出时沿用同一个扩展名
     BANK.package = !!info.package;
@@ -2660,12 +2732,35 @@ ACTIONS['bank.pick'] = async () => {
     if (!info.hasWwise)
       toast('没检测到 Wwise —— 生成 wem 需要它（可只替换已经是 wem 的文件）', 'err');
     else toast(`已导入 ${info.bank}.${BANK.ext}（${BANK.media.length} 条 media）`, 'ok');
-    loadBankDurations(r.path);   // 时长单独算（大包要几秒），算好再把「0:59(2.11MB)」填上
+    loadBankDurations(path);   // 时长单独算（大包要几秒），算好再把「0:59(2.11MB)」填上
   } catch (e) {
     renderBank();
     // 导入失败的原因可能有好几行（文件大小 / 开头字节 / 建议），用弹窗而不是小提示条
     await confirmBox({ title: '导入失败', okText: '知道了', danger: false, message: e.message });
   }
+}
+window.__openBank = openBankPath;
+
+// 自动化验证入口：#bankui=<nbnk 路径>（宿主用 WSE_BANKUI 环境变量拼进来的）
+// —— 只为脚本化截图/自检服务，正常用户走界面按钮。
+(function bankUiFromHash() {
+  const hash = location.hash || '';
+  const m = /[#&]bankui=([^&]+)/.exec(hash);
+  if (!m) return;
+  let path = m[1];
+  try { path = decodeURIComponent(path); } catch (e) {}
+  setTimeout(async () => {
+    try {
+      ACTIONS['win.bank'] && await ACTIONS['win.bank']();
+      await openBankPath(path);
+    } catch (e) { toast('bankui 打开失败：' + e.message, 'err'); }
+  }, 800);
+})();
+
+ACTIONS['bank.pick'] = async () => {
+  const r = await Backend.call('bank.pick', {});
+  if (r.cancelled || !r.path) return;
+  await openBankPath(r.path);
 };
 
 ACTIONS['bank.clear'] = () => { BANK.reps = {}; renderBank(); toast('已清空替换列表'); };
@@ -2713,26 +2808,42 @@ ACTIONS['bank.export'] = async () => {
   btn.disabled = true;
   try {
     // 1) 转 wem（同一个进度里按需转换；已是 .wem 的直接用）
+    //    音量/延时的处理放在这一层：wem.convert 里 ffmpeg 会在转 wav 时一起做掉。
     const directWem = {};       // mediaId -> wem 路径（本来就是 wem）
-    const needConv = [];        // 需要转换的音频
+    const needConv = [];        // 需要转换的音频（带各自的音量/延时）
     mediaIds.forEach(id => {
-      const f = BANK.reps[id];
-      if (/\.wem$/i.test(f)) directWem[id] = f;
-      else needConv.push({ id, file: f });
+      const r = bankRep(id);
+      if (!r || !r.path) return;
+      const tweak = (r.vol !== 100) || (r.delay > 0);
+      if (/\.wem$/i.test(r.path)) {
+        if (tweak) {
+          toast('「' + r.path.split(/[\\/]/).pop() + '」已经是 .wem，不能再调音量/延时：换用 wav / mp3 / ogg / flac', 'err');
+        }
+        directWem[id] = r.path;
+      } else {
+        needConv.push({ id, file: r.path, vol: r.vol, delay: r.delay });
+      }
     });
     const wemOf = Object.assign({}, directWem);
     if (needConv.length) {
-      toast(`正在转换 ${needConv.length} 个音频为 wem…（可能要几十秒）`, 'ok');
-      const res = await Backend.call('wem.convert', { files: needConv.map(x => x.file) });
-      const wems = res.wems || [];
-      // 按文件名（不含扩展名）配对
-      needConv.forEach(x => {
-        const base = x.file.split(/[\\/]/).pop().replace(/\.[^.]+$/, '').toLowerCase();
-        const hit = wems.find(w => w.split(/[\\/]/).pop().replace(/\.wem$/i, '').toLowerCase() === base);
-        if (hit) wemOf[x.id] = hit;
+      const tweaked = needConv.filter(x => x.vol !== 100 || x.delay > 0).length;
+      toast(tweaked
+        ? `正在转换 ${needConv.length} 个音频为 wem（其中 ${tweaked} 个要调音量/延时）…（可能要几十秒）`
+        : `正在转换 ${needConv.length} 个音频为 wem…（可能要几十秒）`, 'ok');
+      const res = await Backend.call('wem.convert', {
+        files: needConv.map(x => x.file),
+        gains: needConv.map(x => x.vol),
+        delays: needConv.map(x => x.delay),
       });
+      const wems = res.wems || [];
+      // 后端按输入顺序返回 wem，所以按下标配对（按文件名配会在同名文件上撞车）
+      needConv.forEach((x, i) => { if (wems[i]) wemOf[x.id] = wems[i]; });
     }
-    const reps = mediaIds.filter(id => wemOf[id]).map(id => ({ media: parseInt(id, 10), wem: wemOf[id] }));
+    const reps = mediaIds.filter(id => wemOf[id]).map(id => ({
+      media: parseInt(id, 10), wem: wemOf[id],
+      vol: bankRep(id) ? bankRep(id).vol : 100,
+      delay: bankRep(id) ? bankRep(id).delay : 0,
+    }));
     if (!reps.length) { toast('转换后没有可用的 wem', 'err'); return; }
 
     // 2) 导出 nbnk（写新文件，不动游戏原文件）
@@ -3007,11 +3118,38 @@ Backend.onEvent(ev => {
    —— 后端 sound.preview / bank.play / audio.playFile 都走同一条 waveOut 播放链，
       所以上面任何一个入口点「试听」都会让这条播放条出现。
    =========================================================================== */
-const PV = { dur: 0, pos: 0, dragging: false, timer: null, paused: false };
+const PV = { dur: 0, pos: 0, dragging: false, timer: null, paused: false, playing: false, lastPos: 0, lastAt: 0 };
 
 function pvFmt(ms) {
   const s = Math.max(0, Math.round((ms || 0) / 1000));
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+// 只画，不取数据：轮询（200ms）和逐帧插值都走这里
+function pvPaint(ms) {
+  const dur = PV.dur || 0;
+  const pct = dur > 0 ? Math.max(0, Math.min(100, ms / dur * 100)) : 0;
+  const sk = $('#pvSeek');
+  if (sk && !PV.dragging) {
+    sk.value = String(Math.round(pct * 10));
+    sk.style.setProperty('--pv', pct.toFixed(1) + '%');
+  }
+  const tm = $('#pvTime');
+  if (tm) tm.textContent = pvFmt(ms) + ' / ' + pvFmt(dur);
+}
+
+// 逐帧推进：两次轮询之间按上一帧的时间往前补，滑块就不会"一秒跳一格、总慢半拍"
+function pvFrame() {
+  if (PV.playing && !PV.dragging && !PV.paused && PV.dur > 0) {
+    const dt = performance.now() - PV.lastAt;
+    pvPaint(Math.min(PV.dur, PV.lastPos + dt));
+    requestAnimationFrame(pvFrame);
+    return;
+  }
+  PV.raf = 0;
+} 
+function pvStartRaf() {
+  if (!PV.raf) PV.raf = requestAnimationFrame(pvFrame);
 }
 
 function pvApply(st) {
@@ -3029,6 +3167,7 @@ function pvApply(st) {
     bar.hidden = true;
     document.body.classList.remove('pvon');
     PV.dur = 0;
+    PV.playing = false;
     return;
   }
   bar.hidden = false;
@@ -3052,6 +3191,12 @@ function pvApply(st) {
   }
   const tm = $('#pvTime');
   if (tm) tm.textContent = pvFmt(pos) + ' / ' + pvFmt(dur);
+  // 记下后端给的这一帧"真值"+本地时间戳：两次轮询之间由逐帧插值往前推
+  PV.pos = pos;
+  PV.playing = playing;
+  PV.lastPos = pos;
+  PV.lastAt = performance.now();
+  if (playing && !paused && !PV.dragging) pvStartRaf();
 }
 
 async function pvPoll() {
@@ -3064,9 +3209,26 @@ async function pvPoll() {
     try { renderBank(); } catch (e) {}
   }
   clearTimeout(PV.timer);
-  // 跳转中也要按快节奏轮询，才能第一时间接上新声部的进度
-  PV.timer = setTimeout(pvPoll, (st && (st.playing || st.seeking)) ? 250 : 1200);
+  // 播起来 150ms 一轮（丝滑），空闲 800ms 一轮（等别人开始播时也不至于慢半拍）
+  PV.timer = setTimeout(pvPoll, (st && (st.playing || st.seeking)) ? 150 : 800);
 }
+
+/* 一发生播放/停止就立刻问一次后端，别等下一轮轮询（否则永远慢半拍） */
+(function hookPlayCalls() {
+  if (typeof Backend === 'undefined' || !Backend || typeof Backend.call !== 'function') return;
+  if (Backend.__pvHooked) return;
+  const orig = Backend.call.bind(Backend);
+  const RE = /^(sound\.preview|sound\.previewSeek|sound\.previewPause|sound\.previewResume|sound\.previewStop|bank\.play|audio\.playFile|bank\.stopPlay)$/;
+  Backend.call = function (method, params) {
+    const p = orig(method, params);
+    if (RE.test(method)) {
+      const kick = () => { try { pvPoll(); } catch (e) {} };
+      p.then(() => { kick(); setTimeout(kick, 140); }, () => {});
+    }
+    return p;
+  };
+  Backend.__pvHooked = true;
+})();
 
 (function pvInit() {
   const bar = $('#pvBar');

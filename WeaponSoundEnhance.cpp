@@ -221,6 +221,9 @@ int            gPrevEntryFsm = -1;
 int            gPrevEntryLmt = -1;
 std::int32_t   gCharge = -1;
 std::uint32_t  gChargeValOff = 0x2358;   // 别用 0x2370：大剑上它只从 2 起跳，分不出 1 蓄和没蓄
+int            gChargeProbe  = -1;       // ChargeProbe=<武器号>：把 0x2300..0x23C0 的候选值写进 gProbeLine
+int            gProbeSeq     = 0;        // 探测行更新次数（worker 循环据此打日志，本文件前面还没有 LogD）
+std::string    gProbeLine;
 
 // ---------------------------------------------------------------------------
 //  场景/装备稳定时间戳 —— 用来压制"进图/换区/切装备"时的 wem 误触发。
@@ -316,12 +319,35 @@ void Refresh()
         }
     }
 
-    // 大剑蓄力等级，复用同一个对象指针
-    if (gWeapon == 0) {
+    // 大剑 / 大锤蓄力等级，复用同一个对象指针
+    //   大剑：0x2358 实测为 0..3（无蓄力=0）
+    //   大锤：先按同一个字段试读（同一段结构里"武器专属值"是复用的），
+    //         若某台机器上读不到，用 ini 的 ChargeProbe=<武器号> 打日志定位
+    if (gWeapon == 0 || gWeapon == 4) {
         std::uintptr_t sp = 0;
         if (mem::ReadVal(entity + gGaugePtrOff, sp) && sp) {
             const int v = mem::ReadI32(sp + gChargeValOff, -1);
             if (v >= 0 && v <= 3) gCharge = v;
+        }
+    }
+
+    // ---- 蓄力偏移探测（ChargeProbe=<武器号>，平时关闭）----
+    // 用途：大锤这类"还没确认偏移"的武器，进游戏蓄力一次，日志里每行是一整组
+    // 0..4 的候选值（如 2358=0 235C=1 ...），变化时才打印，据此定 ChargeValOff。
+    // 注意：这里在 player::Update 里，LogD 还没声明 → 只存字符串，由 worker 循环打印。
+    if (gChargeProbe >= 0 && gWeapon == gChargeProbe) {
+        std::uintptr_t sp = 0;
+        if (mem::ReadVal(entity + gGaugePtrOff, sp) && sp) {
+            std::string s;
+            for (std::uint32_t o = 0x2300; o <= 0x23C0; o += 4) {
+                const int v = mem::ReadI32(sp + o, -999);
+                if (v >= 0 && v <= 4) {
+                    char buf[24] = {};
+                    std::snprintf(buf, sizeof(buf), "%03X=%d ", o, v);
+                    s += buf;
+                }
+            }
+            if (s != gProbeLine) { gProbeLine = s; ++gProbeSeq; }
         }
     }
     // 蓄力段数变化由 worker 循环打日志（那里 LogD 在作用域内；此处只负责读值）
@@ -903,7 +929,8 @@ bool WemIsIgnored(long long media) {
 }
 std::uint32_t gGaugePtrOff = 0x76B0;
 std::uint32_t gGaugeValOff = 0x2370;
-std::uint32_t gChargeValOff = 0x2358;          // 大剑蓄力等级（与刃级共用 GaugePtrOff）
+std::uint32_t gChargeValOff = 0x2358;          // 大剑/大锤蓄力等级（与刃级共用 GaugePtrOff）
+int           gChargeProbe  = -1;              // ChargeProbe=<武器号>：把 0x2300..0x23C0 的候选值打进日志，-1=关
 std::uint32_t gFsmTargetOff = 0x6274;          // FSM target 值偏移
 std::uintptr_t gQuestRoot   = 0x14500ED30ULL;  // 任务结构入口
 std::uint32_t gQuestDmgOff  = 0x17088;         // 任务累计伤害（只含你自己）
@@ -2098,6 +2125,7 @@ void LoadConfig()
                 else if (key == "GaugePtrOff") { std::uintptr_t v = ParseHex(val); if (v) gGaugePtrOff = (std::uint32_t)v; }
                 else if (key == "GaugeValOff") { std::uintptr_t v = ParseHex(val); if (v) gGaugeValOff = (std::uint32_t)v; }
                 else if (key == "ChargeValOff") gChargeValOff = (std::uint32_t)ParseHex(val);
+                else if (key == "ChargeProbe")  gChargeProbe  = std::atoi(val.c_str());
                 else if (key == "FsmTargetOff") gFsmTargetOff = (std::uint32_t)ParseHex(val);
                 else if (key == "QuestRoot")    gQuestRoot    = ParseHex(val);
                 else if (key == "QuestDmgOff")  gQuestDmgOff  = (std::uint32_t)ParseHex(val);
@@ -2304,6 +2332,7 @@ void LoadConfig()
     player::gGaugePtrOff = gGaugePtrOff;
     player::gGaugeValOff = gGaugeValOff;
     player::gChargeValOff = gChargeValOff;
+    player::gChargeProbe  = gChargeProbe;
     player::gFsmTargetOff = gFsmTargetOff;
     player::gQuestRoot    = gQuestRoot;
     player::gQuestDmgOff  = gQuestDmgOff;
@@ -3278,6 +3307,15 @@ DWORD WINAPI WorkerProc(LPVOID)
                 LogD("[charge] lvl %d -> %d   fsm=%d fsmTarget=%d lmt=%d weapon=%d",
                      chargeSeen, player::gCharge, fsm, player::gFsmTarget, lmt, weapon);
             chargeSeen = player::gCharge;
+        }
+
+        // 蓄力偏移探测（ChargeProbe=<武器号>）：player::Update 里只更新计数器，这里打日志
+        {
+            static int probeSeen = 0;
+            if (player::gProbeSeq != probeSeen) {
+                probeSeen = player::gProbeSeq;
+                LogD("[cprobe] w=%d %s", weapon, player::gProbeLine.c_str());
+            }
         }
         // -------------------------------------------------------------------
         //  监听位 0：派生 ID 流

@@ -598,7 +598,7 @@ button.reload:active{transform:scale(.98)}
 /* 底部播放条是 position:fixed 的：出现时给整个应用底部留出同样的空间，
    否则它会压住列表最后一行（用户报"挡住最底部的 wem 条目"）。
    给 .app 加内边距（而不是给各滚动容器加），这样整个布局一起缩，不会只缩一半。 */
-body.pvon .app{padding-bottom:62px}
+body.pvon .app{/* 播放条已是布局的一部分，不再需要额外留白 */}
 
 /* 正在试听的那一行：左侧竖条 + 淡蓝底 + ▶ 序号，条目一多也不会跟丢 */
 .banktable tbody tr.on td{background:var(--row-sel-bg)}
@@ -864,11 +864,11 @@ td .enbox{width:15px; height:15px; margin:0 7px 0 0; vertical-align:middle; curs
 .bankempty button.primary{margin-top:4px; padding:9px 22px}
 .bankwork{display:flex; flex-direction:column; gap:7px; flex:1; min-height:0}
 
-/* 底部播放条：试听时可拖进度 */
-.pvbar{position:fixed; left:12px; right:12px; bottom:10px; z-index:60;
-       display:flex; align-items:center; gap:10px; padding:8px 12px;
+/* 底部播放条：试听时出现，占一行布局（不再浮在内容上，绝不会挡住列表最后一行） */
+.pvbar{flex:none; display:flex; align-items:center; gap:10px; padding:8px 12px;
        background:var(--panel); border:var(--bw) solid var(--line-2);
        border-radius:12px; box-shadow:0 8px 26px rgba(0,0,0,.18)}
+.pvbar[hidden]{display:none !important}
 .pvbar .pvicon{flex:none; width:16px; text-align:center; color:var(--accent); font-weight:800}
 .pvbar .pvname{flex:none; max-width:34vw; overflow:hidden; text-overflow:ellipsis;
                white-space:nowrap; font-size:12px; font-weight:600}
@@ -929,3 +929,55 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.12)}
 .homewarn .hwhint{margin-top:4px; font-size:12px; color:var(--muted); text-wrap:pretty}
 .homewarn .hwbtns{grid-column:2; grid-row:2; display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-start; align-items:center}
 .homewarn button{white-space:nowrap}
+/* ===========================================================================
+   音效包制作页（重做布局）
+   目标：说明/提示挪到上面两栏（顶栏 + 左栏），中间整块留给 wem 列表；
+        列表自己有滚动条，底部播放条不再压住最后几行。
+   =========================================================================== */
+/* 顶栏：标题 + 摘要 + 转换环境 + 捕获过滤，一行放不下就换行，不再挤成一条细线 */
+.banktop{flex-wrap:wrap; row-gap:6px}
+.banktop-sum{font-size:12px; color:var(--muted); max-width:46ch;
+             overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+/* 左栏里的「说明 / 生效提示」：折叠着不占地方，展开也在窄栏里滚 */
+.rail .bankhelp{margin:8px 4px 2px}
+.rail .bankhelp>summary{padding:6px 9px; font-size:11.5px}
+.rail .bankhelp .note{font-size:11px; line-height:1.55; margin:0 9px 7px}
+.rail-scroll{overflow:auto}
+/* 主区：只有列表滚，其它都固定；不再用 min-height:46vh/58vh 把表格顶出容器 */
+.bankpage{overflow:hidden; padding:10px 12px; gap:7px}
+.banktable{flex:1 1 auto; min-height:0; max-height:none; overflow:auto; scrollbar-gutter:stable}
+.banktable thead th{position:sticky; top:0; z-index:2; background:var(--table-head-bg)}
+/* 行内小控件（音量 / 延时） */
+.banktable th.num{text-align:right}
+.banktable input.mini-num{width:58px; padding:2px 6px; text-align:right;
+                          font-variant-numeric:tabular-nums; font-size:12px}
+.banktable .repname{display:inline-block; max-width:186px; overflow:hidden;
+                    text-overflow:ellipsis; white-space:nowrap; vertical-align:middle}
+.banktable td .acts{gap:4px; flex-wrap:wrap}
+.banktable td .acts button{padding:3px 8px; font-size:11.5px}
+/* 滚动条常驻可见：Win11 的自动隐藏细条几乎看不出来，用户以为"没有滑条" */
+.tablewrap::-webkit-scrollbar{width:12px; height:12px}
+.tablewrap::-webkit-scrollbar-track{background:transparent}
+.tablewrap::-webkit-scrollbar-thumb{background:color-mix(in srgb, var(--text) 24%, transparent);
+  border-radius:9px; border:3px solid transparent; background-clip:content-box}
+.tablewrap::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb, var(--text) 42%, transparent);
+  background-clip:content-box}
+/* 收窄修正：8 列表格的最小宽度会把整行顶出窗口（右侧捕获栏被切掉、摘要被截成"共 6 …"）。
+   这里让顶栏、主区、表格容器都可以被压窄，表格自己横向滚动。 */
+#mainBank, .center, .bankpage, .banktable, .banktop{min-width:0}
+.banktop-sum{max-width:none; flex:1 1 auto; min-width:14ch; white-space:normal; overflow:visible; text-overflow:clip}
+.banktable table{width:100%}
+.banktable td, .banktable th{white-space:nowrap}
+.banktable td.repcell{white-space:normal}
+/* 每条 media 两行：第一行数据，第二行工具按钮（横排）。
+   以前按钮全挤在最后一列，窗口一窄就竖着堆成好几行；现在整行宽度都给它。 */
+.banktable tr.brow > td{border-bottom:0; padding-bottom:1px}
+.banktable tr.bact > td{border-bottom:1px solid var(--row-line); padding-top:0; padding-bottom:6px}
+.banktable tr.bact .acts{display:flex; gap:6px; flex-wrap:nowrap; justify-content:flex-end; overflow-x:auto}
+.banktable tr.bact .acts button{padding:3px 10px; font-size:11.5px; white-space:nowrap; flex:none}
+.banktable tr.brow > td, .banktable tr.bact > td{transition:background .1s var(--ease-out)}
+.banktable tr.brow:hover > td, .banktable tr.bact:hover > td{background:var(--row-hover)}
+.banktable tr.brow.on > td, .banktable tr.bact.on > td{background:var(--row-sel-bg)}
+/* 列宽：替换为 / 名称可压缩，数字列固定，避免把表格撑宽 */
+.banktable td.repcell{max-width:240px; overflow:hidden; text-overflow:ellipsis}
+.banktable td.repcell .repname{max-width:100%}

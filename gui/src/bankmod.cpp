@@ -3,6 +3,7 @@
 //  只依赖 ffmpeg.exe + WwiseConsole.exe（都在本机可定位），不联网。
 // ===========================================================================
 #include "bankmod.h"
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -552,7 +553,9 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
                   const std::wstring& workDir,
                   std::vector<std::wstring>& outWems,
                   std::string& log,
-                  const std::wstring& wwiseConsoleExe) {
+                  const std::wstring& wwiseConsoleExe,
+                  const std::vector<float>* gains,
+                  const std::vector<int>* delays) {
     outWems.clear();
     if (audioFiles.empty()) { log = "没有音频文件"; return false; }
     if (!::CreateDirectoryW(workDir.c_str(), nullptr) &&
@@ -564,8 +567,11 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
     ::CreateDirectoryW(wavDir.c_str(), nullptr);
 
     // 1) ffmpeg：任意格式 -> wav（48kHz / 立体声，和游戏内 wem 一致的常见配置）
+    //    音量/延时也在这里做：volume=<倍率> + adelay=<毫秒>|<毫秒>（双声道各一份）
+    //    调过音量/延时的输入**即使已经是 wav 也要重编码**（直接复制就白调了）。
     std::vector<std::wstring> wavs;
-    for (const std::wstring& src : audioFiles) {
+    for (std::size_t idx = 0; idx < audioFiles.size(); ++idx) {
+        const std::wstring& src = audioFiles[idx];
         std::wstring base = BaseNameUtf8(src).empty() ? L"a" : std::wstring();
         // base 用宽字符版
         size_t s = src.find_last_of(L"\\/");
@@ -575,24 +581,47 @@ bool ConvertToWem(const std::vector<std::wstring>& audioFiles,
         if (nm.empty()) nm = L"a";
         (void)base;
         const std::wstring dst = wavDir + nm + L".wav";
-        // 已是 wav 就跳过转码（省时间、避免二次重采样）
+        // 本条的音量倍率与前置静音
+        float gain = 1.0f;
+        int delayMs = 0;
+        if (gains && idx < gains->size() && (*gains)[idx] > 0.0f) gain = (*gains)[idx];
+        if (gains && gain > 4.0f) gain = 4.0f;
+        if (delays && idx < delays->size() && (*delays)[idx] > 0) delayMs = (*delays)[idx];
+        if (delayMs > 60000) delayMs = 60000;
+        const bool tweak = (std::fabs(gain - 1.0f) > 0.001f) || delayMs > 0;
+        // 已是 wav 就跳过转码（省时间、避免二次重采样）—— 除非要调音量/延时
         size_t ext = src.find_last_of(L'.');
         const bool isWav = (ext != std::wstring::npos &&
                             (src.substr(ext) == L".wav" || src.substr(ext) == L".WAV"));
-        if (isWav) {
+        if (isWav && !tweak) {
             if (!::CopyFileW(src.c_str(), dst.c_str(), FALSE)) {
                 log = "复制 wav 失败：" + ToUtf8(src);
                 return false;
             }
         } else {
             if (ffmpegExe.empty() || ::GetFileAttributesW(ffmpegExe.c_str()) == INVALID_FILE_ATTRIBUTES) {
-                log = "需要 ffmpeg.exe 才能转换 " + ToUtf8(src) +
-                      "（点「音效包制作」页里的「选择 ffmpeg.exe…」指定它的位置；"
-                      "或把 ffmpeg.exe 放到 wemkit\\ 目录下）";
+                log = tweak
+                    ? ("需要 ffmpeg.exe 才能调整音量/延时：" + ToUtf8(src) +
+                       "（点这一页的「选择 ffmpeg.exe…」指定它的位置；或把 ffmpeg.exe 放到 wemkit\\ 目录下）")
+                    : ("需要 ffmpeg.exe 才能转换 " + ToUtf8(src) +
+                       "（点这一页的「选择 ffmpeg.exe…」指定它的位置；或把 ffmpeg.exe 放到 wemkit\\ 目录下）");
                 return false;
             }
+            std::wstring af;
+            if (tweak) {
+                wchar_t gbuf[32] = {};
+                ::swprintf_s(gbuf, L"volume=%.3f", (double)gain);
+                af = gbuf;
+                if (delayMs > 0) {
+                    wchar_t dbuf[64] = {};
+                    ::swprintf_s(dbuf, L"adelay=%d|%d", delayMs, delayMs);
+                    af += L",";
+                    af += dbuf;
+                }
+            }
             std::wstring cmd = L"\"" + ffmpegExe + L"\" -hide_banner -loglevel error -y -i \"" + src +
-                               L"\" -ar 48000 -ac 2 \"" + dst + L"\"";
+                               L"\"" + (af.empty() ? std::wstring() : (L" -af \"" + af + L"\"")) +
+                               L" -ar 48000 -ac 2 \"" + dst + L"\"";
             STARTUPINFOW si{};
             si.cb = sizeof(si);
             PROCESS_INFORMATION pi{};

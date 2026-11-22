@@ -7103,6 +7103,34 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             std::vector<std::wstring> files;
             for (std::size_t i = 0; i < jf->a.size(); ++i)
                 files.push_back(Utf8ToWide(jf->a[i].asStr()));
+            // 可选的"每条各自的音量（百分比 0..200）与前置静音（毫秒）"，与 files 一一对齐
+            std::vector<float> gains;
+            std::vector<int> delays;
+            {
+                const JVal* jg = p.find("gains");
+                const JVal* jd = p.find("delays");
+                bool anyGain = false, anyDelay = false;
+                for (std::size_t i = 0; i < files.size(); ++i) {
+                    float g = 1.0f;
+                    if (jg && jg->isArr() && i < jg->a.size()) {
+                        const int pct = jg->a[i].asInt(100);
+                        g = (pct <= 0 ? 1.0f : (float)pct / 100.0f);
+                        if (g > 4.0f) g = 4.0f;
+                        if (std::fabs(g - 1.0f) > 0.001f) anyGain = true;
+                    }
+                    int dl = 0;
+                    if (jd && jd->isArr() && i < jd->a.size()) {
+                        dl = jd->a[i].asInt(0);
+                        if (dl < 0) dl = 0;
+                        if (dl > 60000) dl = 60000;
+                        if (dl > 0) anyDelay = true;
+                    }
+                    gains.push_back(g);
+                    delays.push_back(dl);
+                }
+                if (!anyGain) gains.clear();
+                if (!anyDelay) delays.clear();
+            }
             // Wwise 工程：GUI 目录下的 wemkit\wavtowemscript.wproj（随包分发）
             std::wstring proj = Utf8ToWide(im->exeDir) + L"wemkit\\wavtowemscript\\wavtowemscript.wproj";
             if (::GetFileAttributesW(proj.c_str()) == INVALID_FILE_ATTRIBUTES)
@@ -7113,7 +7141,9 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             std::vector<std::wstring> wems;
             std::string log;
             const std::wstring ww = FindWwiseConsoleEx(im->prefs.wwisePath);
-            if (!bankmod::ConvertToWem(files, proj, ff, work, wems, log, ww)) return ErrJson(log);
+            if (!bankmod::ConvertToWem(files, proj, ff, work, wems, log, ww,
+                                       gains.empty() ? nullptr : &gains,
+                                       delays.empty() ? nullptr : &delays)) return ErrJson(log);
             JVal arr = JVal::arr();
             for (const std::wstring& w : wems) arr.push(JVal(Utf8FromWide(w)));
             JVal d = JVal::obj();
