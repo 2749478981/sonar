@@ -1890,35 +1890,63 @@ SoundEntry EntryFromJson(const JVal& v, const std::vector<std::string>& allowedC
     return e;
 }
 
-// 条目去重键：武器 + 组合 + FSM + 目标层 + LMT + 全部音效路径。
-// （旧版就是这个规则，导入组合包/合并旧 ini 时用它判重。）
-std::string EntryKey(const SoundEntry& e) {
-    std::string k = std::to_string(e.weaponType) + "|" + e.combo + "|" +
-                    std::to_string(e.fsmId) + "|" + std::to_string(e.fsmTarget) + "|";
-    for (std::size_t i = 0; i < e.lmt.size(); ++i) k += std::to_string(e.lmt[i]) + ",";
-    k += "|";
-    for (std::size_t i = 0; i < e.def.specs.size(); ++i) k += e.def.specs[i].path + ";";
-    for (std::size_t x = 0; x < e.extras.size(); ++x)
-        for (std::size_t i = 0; i < e.extras[x].pool.specs.size(); ++i) k += e.extras[x].pool.specs[i].path + ";";
-    for (int i = 0; i < 4; ++i)
-        for (std::size_t j = 0; j < e.gauge[i].specs.size(); ++j) k += e.gauge[i].specs[j].path + ";";
-    for (int i = 0; i < 4; ++i)
-        for (std::size_t j = 0; j < e.charge[i].specs.size(); ++j) k += e.charge[i].specs[j].path + ";";
-    for (std::size_t i = 0; i < e.conds.size(); ++i)
-        for (std::size_t j = 0; j < e.conds[i].pool.specs.size(); ++j) k += e.conds[i].pool.specs[j].path + ";";
-    return k;
+// 音效路径归一化：去掉 sounds/<组合名>/ 前缀，只留文件名。
+// 导入组合包时程序会把音效复制到 sounds\<组合名>\ 并改写路径，
+// 所以"同一个音效"在不同机器/不同组合里前缀不同 —— 比较时必须忽略前缀，
+// 否则自己导入自己的包会冒出一整批"看起来一样"的重复条目。
+static std::string NormSoundPath(const std::string& p) {
+    std::string s = p;
+    for (std::size_t i = 0; i < s.size(); ++i) if (s[i] == '\\') s[i] = '/';
+    if (s.size() >= 7 && s.compare(0, 7, "sounds/") == 0) {
+        const std::size_t sl = s.find('/', 7);
+        if (sl != std::string::npos) s = s.substr(sl + 1);
+    }
+    return s;
 }
 
-// 条目身份键（保留定义给以后的分组用；导入判重已改回"路径也参与"的 EntryKey）。
-// 用途：导入组合包时，把同一个动作的新一版音效【更新】到已有条目上，
-// 而不是因为路径不同就再加一条（以前的判重键含路径 → 自己导入自己的包就会
-// 冒出成对的重复条目：338 条里有 70 条重复，用户看到的列表和别人的对不上）。
-std::string EntryIdentity(const SoundEntry& e) {
-    std::string k = std::to_string(e.weaponType) + "|" + e.combo + "|" + e.name + "|" +
-                    std::to_string(e.fsmId) + "|" + std::to_string(e.fsmTarget) + "|";
+// 条目去重键（导入组合包 / 合并旧 ini 用）。
+// ★ 必须把"影响触发行为的每个字段"都算进去：以前只比 FSM/LMT + 音效路径，
+//   结果同一招但判定方式不同（判定模式、检查窗口、蓄力等级、前置条件…）的两条
+//   会被当成同一条直接丢掉 —— 用户看到的条目比导出的少，还以为是自己配错了。
+//   音效路径按上面的 NormSoundPath 归一化，避免"复制到 sounds\<组合>\ 后路径变了"
+//   又变成新条目。
+std::string EntryKey(const SoundEntry& e) {
+    std::string k = std::to_string(e.weaponType) + "|" + e.combo + "|" +
+                    std::to_string(e.fsmId) + "|" + std::to_string(e.fsmTarget) + "|" +
+                    std::to_string(e.media) + "|";
     for (std::size_t i = 0; i < e.lmt.size(); ++i) k += std::to_string(e.lmt[i]) + ",";
-    k += "|c" + std::to_string(e.chargeLevel) + "|r" + std::to_string(e.gaugeRise) +
-         "|p" + std::to_string(e.prevFsm) + "," + std::to_string(e.prevLmt);
+    k += "|c" + std::to_string(e.chargeLevel) + (e.chargeCut ? "x" : "-");
+    k += "|r" + std::to_string(e.gaugeRise);
+    k += "|p" + std::to_string(e.prevFsm) + "," + std::to_string(e.prevLmt);
+    k += "|g" + e.group + (e.stop ? "|S" : "|-");
+
+    // 判定设置：这几个字段决定"同一招什么时候响哪一条"，必须参与判重
+    k += "|j" + std::to_string(e.judgePreset) + "|m" + std::to_string(e.checkMode) +
+         "|d" + std::to_string(e.checkDelayMs) + "|t" + std::to_string(e.checkTimeoutMs) +
+         "|o" + std::to_string(e.checkOffsetMs) + (e.endOnAction ? "|E" : "|-");
+
+    // 音效池：归一化路径 + 延时 + 音量（同文件不同延时/音量是两条不同的配置）
+    auto addPool = [&k](const PoolSpec& p, const char* tag) {
+        k += "|";
+        k += tag;
+        for (std::size_t i = 0; i < p.specs.size(); ++i) {
+            k += NormSoundPath(p.specs[i].path) + "#" +
+                 std::to_string(p.specs[i].delay) + "#" + std::to_string(p.specs[i].vol) + "#" +
+                 (p.specs[i].fixed ? "F" : "-") + "#" + std::to_string(p.specs[i].cdMs) + "#" +
+                 (p.specs[i].playLock ? "P" : "-") + ";";
+        }
+    };
+    addPool(e.def, "def");
+    for (std::size_t x = 0; x < e.extras.size(); ++x) {
+        k += "|x" + e.extras[x].name;
+        addPool(e.extras[x].pool, "xp");
+    }
+    for (int i = 0; i < 4; ++i) addPool(e.gauge[i], ("g" + std::to_string(i)).c_str());
+    for (int i = 0; i < 4; ++i) addPool(e.charge[i], ("c" + std::to_string(i)).c_str());
+    for (std::size_t i = 0; i < e.conds.size(); ++i) {
+        k += "|q" + e.conds[i].expr + (e.conds[i].atEnd ? "@end" : "@now");
+        addPool(e.conds[i].pool, "qp");
+    }
     return k;
 }
 
@@ -4203,7 +4231,7 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
     for (std::size_t i = 0; i < im->cfg.entries.size(); ++i)
         have.push_back(EntryKey(im->cfg.entries[i]));
 
-    int added = 0, skipped = 0;
+    int added = 0, skipped = 0, renamed = 0;
     for (std::size_t i = 0; i < old.entries.size(); ++i) {
         SoundEntry e = old.entries[i];
 
@@ -4255,6 +4283,27 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
         for (std::size_t h = 0; h < have.size(); ++h) if (have[h] == k) { dup = true; break; }
         if (dup) { ++skipped; continue; }
 
+        // 同武器同组合里重名 → 自动编号（"取出武器"、"取出武器(2)"…）。
+        // 用户的心智模型是"这几条是不同条目，只是名字一样"，所以宁可编号也不能合并/丢弃。
+        if (!e.name.empty()) {
+            bool clash = false;
+            for (std::size_t h = 0; h < im->cfg.entries.size(); ++h)
+                if (im->cfg.entries[h].weaponType == e.weaponType &&
+                    im->cfg.entries[h].combo == e.combo &&
+                    im->cfg.entries[h].name == e.name) { clash = true; break; }
+            if (clash) {
+                for (int n = 2; n < 1000; ++n) {
+                    const std::string cand = e.name + "(" + std::to_string(n) + ")";
+                    bool used = false;
+                    for (std::size_t h = 0; h < im->cfg.entries.size(); ++h)
+                        if (im->cfg.entries[h].weaponType == e.weaponType &&
+                            im->cfg.entries[h].combo == e.combo &&
+                            im->cfg.entries[h].name == cand) { used = true; break; }
+                    if (!used) { e.name = cand; ++renamed; break; }
+                }
+            }
+        }
+
         im->cfg.entries.push_back(e);
         have.push_back(EntryKey(im->cfg.entries.back()));
         ++added;
@@ -4267,7 +4316,8 @@ JVal MergeConfigFile(void* corePtr, const std::string& p, bool importCombo) {
     if (sndMissing > 0)
         extra += "；有 " + std::to_string(sndMissing) + " 个音效在包里没找到，路径保持原样";
     im->SetStatus("导入配置: 新增 " + std::to_string(added) + " 条" +
-                  "，跳过重复 " + std::to_string(skipped) + " 条" + extra);
+                  (renamed > 0 ? ("（其中 " + std::to_string(renamed) + " 条重名，已自动编号）") : std::string()) +
+                  "，跳过完全重复 " + std::to_string(skipped) + " 条" + extra);
 
     // 导入出新组合时自动把对应武器的当前组合切过去：否则条目落在"非激活组合"里，
     // 列表和游戏里都看不到，用户会以为没导入成功。
@@ -4849,6 +4899,12 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 k += "|r" + std::to_string(e.gaugeRise);
                 // Stop 与普通条目语义不同；Group 不同则"整招只响一次"的范围也不同，都不能并
                 k += std::string("|s") + (e.stop ? "1" : "0") + "|g" + e.group;
+                // ★ 判定方式不同的两条不是"同一条件的多条"：判定模式/检查窗口/前置条件不同
+                //   → 触发时机、挑哪个音效都不同，既不能被"合并同条件"并掉，检查也不能当成重复
+                k += "|j" + std::to_string(e.judgePreset) + "|m" + std::to_string(e.checkMode) +
+                     "|d" + std::to_string(e.checkDelayMs) + "|t" + std::to_string(e.checkTimeoutMs) +
+                     "|o" + std::to_string(e.checkOffsetMs) + (e.endOnAction ? "|E" : "|-");
+                k += "|v" + std::to_string(e.prevFsm) + "," + std::to_string(e.prevLmt);
                 return k;
             };
             auto addPool = [](PoolSpec& dst, const PoolSpec& src) {
@@ -4927,6 +4983,12 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 k += "|r" + std::to_string(e.gaugeRise);
                 // Stop 与普通条目语义不同；Group 不同则"整招只响一次"的范围也不同，都不能并
                 k += std::string("|s") + (e.stop ? "1" : "0") + "|g" + e.group;
+                // ★ 判定方式不同的两条不是"同一条件的多条"：判定模式/检查窗口/前置条件不同
+                //   → 触发时机、挑哪个音效都不同，既不能被"合并同条件"并掉，检查也不能当成重复
+                k += "|j" + std::to_string(e.judgePreset) + "|m" + std::to_string(e.checkMode) +
+                     "|d" + std::to_string(e.checkDelayMs) + "|t" + std::to_string(e.checkTimeoutMs) +
+                     "|o" + std::to_string(e.checkOffsetMs) + (e.endOnAction ? "|E" : "|-");
+                k += "|v" + std::to_string(e.prevFsm) + "," + std::to_string(e.prevLmt);
                 return k;
             };
             for (std::size_t i = 0; i < im->cfg.entries.size(); ++i) {

@@ -518,7 +518,11 @@ static void WriteEntry(const SoundEntry& e, int n, std::string& o) {
     if (e.fsmTarget >= 0) o += "FSMTarget=" + std::to_string(e.fsmTarget) + "\r\n";
     // 条件池只要有就写：以前还要求 checkTimeoutMs > 0，导致"有条件但没设窗口"的条目
     // 导出后条件池整块消失（对方导入后那几条静默没声音）。
-    if (!e.conds.empty()) {
+    // ★ 判定相关的字段同理：只选了判定方式、还没生成条件池的条目，以前整段不写 →
+    //   导出/保存后再看就"判定方式被重置成默认"，两条本来是不同判定方式的条目还会被当成重复。
+    const bool judgeInUse = e.judgePreset != 0 || e.checkMode != 0 || e.checkDelayMs > 0 ||
+                            e.checkTimeoutMs > 0 || e.endOnAction || !e.conds.empty();
+    if (judgeInUse) {
         if (e.checkDelayMs > 0)
             o += "CheckDelayMs=" + std::to_string(e.checkDelayMs) + "\r\n";
         o += "CheckTimeoutMs=" + std::to_string(e.checkTimeoutMs) + "\r\n";

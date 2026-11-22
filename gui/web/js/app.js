@@ -626,9 +626,17 @@ function renderTable() {
   //   （段数是组内的细分，不是条件本身）。只是把标题从"同一触发条件"换成招式名。
   const CHARGE_FSM_NAME = { 85: '蓄力', 86: '强蓄力', 102: '真蓄力' };
   const GAUGE_NAME = { 1: '白刃', 2: '黄刃', 3: '红刃' };
+  // ★ "触发条件"包含判定方式：同一招但高级设置里判定方式/检查窗口/前置条件不同的两条，
+  //   触发时机和挑哪个音效都不一样，**不是**"同一条件的多条"，分组时要分开，
+  //   否则会误导成"这几条是同一个条目拆出来的不同类音效"（用户反馈过的导出困惑）。
   const condKey = e => [e.weaponType, e.fsmId, e.fsmTarget,
                          (e.lmtAny || !(e.lmt || []).length) ? 'any' : (e.lmt || []).join(','),
-                         (e.gaugeRise > 0) ? ('r' + e.gaugeRise) : ''].join('|');
+                         (e.gaugeRise > 0) ? ('r' + e.gaugeRise) : '',
+                         'j' + (e.judgePreset || 0), 'm' + (e.checkMode || 0),
+                         'd' + (e.checkDelayMs || 0), 't' + (e.checkTimeoutMs || 0),
+                         'o' + (e.checkOffsetMs || 0),
+                         'p' + (e.prevFsm ?? -1) + ',' + (e.prevLmt ?? -1),
+                         'q' + ((e.conds || []).length)].join('|');
   const groups = [];
   const groupOf = {};
   view.forEach(item => {
@@ -651,7 +659,7 @@ function renderTable() {
         hint = '（这两条/几条是同一个蓄力条件的不同段；段数在各自行里显示）';
       } else {
         title = `同一触发条件 · ${g.items.length} 条`;
-        hint = '（同一动作会同时播放这几条；想合并成一条可点工具栏「合并同条件」）';
+        hint = '（同一动作 + 同样的判定设置，会同时播放这几条；判定设置不同的会单独成组）';
       }
       tb.appendChild(h('tr', { class: 'grp' },
         h('td', { colspan: '6' },

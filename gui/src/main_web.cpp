@@ -1137,6 +1137,24 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                 arg += "\"}";
                 LogLine("importv: %s", g_core.Handle("combo.import", arg).c_str());
                 LogLine("stats2: %s", g_core.Handle("diag.combos", "{}").c_str());
+                // 落盘一次：验证"导入后重名编号"是否真的写进了 ini（自动化验证用）
+                LogLine("impsave: %s", g_core.Handle("config.save", "{}").c_str());
+            }
+        }
+
+        // 设置 WSE_EXPORT=<zip 路径> 启动时导出当前武器当前组合（自动化验证"导出→导入"用）
+        {
+            wchar_t buf[1024] = {};
+            if (::GetEnvironmentVariableW(L"WSE_EXPORT", buf, 1024) > 0 && buf[0]) {
+                const std::string u8 = WideToUtf8(buf);
+                std::string arg = "{\"path\":\"";
+                for (std::size_t i = 0; i < u8.size(); ++i) {
+                    const char c = u8[i];
+                    if (c == '\\' || c == '"') arg += '\\';
+                    arg += c;
+                }
+                arg += "\"}";
+                LogLine("exportv: %s", g_core.Handle("combo.export", arg).c_str());
             }
         }
     }
