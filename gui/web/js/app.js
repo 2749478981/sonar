@@ -1384,8 +1384,10 @@ function fillEditor() {
 
   // 触发方式：动作命中（按 FSM/LMT） / 刃级升段（太刀） / 超蓄力（大锤）
   // 刃级升段只受武器过滤，FSM / LMT / 蓄力都不参与 → 选它时把这几行藏起来。
-  // 超蓄力（power charge）本质是大锤的一个动作：FSMId = 126，所以选它就把 FSMId 填成 126、LMT 不限。
+  // 超蓄力（power charge）本质是大锤的一个动作：实测捕获到的是 FSMId=126、LMT=49315，
+  //   所以选它就把这两项填好，行还是显示出来（LMT 允许改，改成不限也行）。
   const HAMMER_POWER_FSM = 126;
+  const HAMMER_POWER_LMT = 49315;
   function trigModeOf() {
     if (e.gaugeRise > 0) return 'gauge';
     if (e.weaponType === 4 && e.fsmId === HAMMER_POWER_FSM) return 'power';
@@ -1416,7 +1418,7 @@ function fillEditor() {
     }
     const gauge = (mode === 'gauge');
     const power = (mode === 'power');
-    const stateOnly = gauge || power;          // 状态型触发：不看 FSM / LMT / 蓄力
+    const stateOnly = gauge;                   // 刃级是纯状态触发：不看 FSM / LMT / 蓄力
     const th = document.querySelector('#edTrigHint');
     const rowFsm = document.querySelector('#edRowFsm');
     const rowLmt = document.querySelector('#edRowLmt');
@@ -1428,16 +1430,15 @@ function fillEditor() {
     const isGsOnly = (e.weaponType === 0);                        // 只有大剑有分段派生
     if (gr) { gr.hidden = !gauge; gr.value = String(gauge ? e.gaugeRise : 3); }
     if (th) {
-      th.hidden = !stateOnly;
-      if (gauge) th.textContent = '刃级升到该颜色的那一瞬间播放一次；掉刃或换武器后重新计。不看 FSM / LMT —— 升刃时正在打哪一招并不固定。';
-      else if (power) th.textContent = '大锤进入超蓄力的那一瞬间播放一次（动作 126 已经自动填好，LMT 不限）。蓄力等级是另一件事，用上面那行单独配。';
+      th.hidden = !gauge;
+      if (gauge) th.textContent = '升刃那一刻播放一次，不看 FSM / LMT。';
     }
     if (rowFsm) rowFsm.style.display = (stateOnly || isWem) ? 'none' : '';
     if (rowLmt) rowLmt.hidden = stateOnly;
     if (lh) lh.hidden = stateOnly;
-    if (cr) cr.hidden = stateOnly || !isGswd;
-    if (chh) chh.hidden = stateOnly || !isGswd;
-    if (dr) dr.hidden = stateOnly || !isGsOnly || !(e.chargeLevel > 0);
+    if (cr) cr.hidden = gauge || !isGswd;
+    if (chh) chh.hidden = gauge || !isGswd;
+    if (dr) dr.hidden = gauge || !isGsOnly || !(e.chargeLevel > 0);
   }
   {
     const ms = document.querySelector('#edTrigMode');
@@ -1459,9 +1460,9 @@ function fillEditor() {
         e.fsmId = -1; e.lmt = []; e.lmtAny = true; e.chargeLevel = 0; e.chargeCut = false;
         setCtl();
       } else if (v === 'power') {
-        // 超蓄力 = 大锤的 126 号动作：只填 FSM，LMT 不限，别加蓄力等级
+        // 超蓄力 = 大锤的 126 号动作（实测捕获到 LMT 49315）：填好这两项，行照常显示，可以改成不限
         e.gaugeRise = 0;
-        e.fsmId = HAMMER_POWER_FSM; e.lmt = []; e.lmtAny = true;
+        e.fsmId = HAMMER_POWER_FSM; e.lmt = [HAMMER_POWER_LMT]; e.lmtAny = false;
         e.chargeLevel = 0; e.chargeCut = false;
         setCtl();
       } else {
