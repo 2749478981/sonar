@@ -1377,7 +1377,8 @@ function fillEditor() {
     const cr = document.querySelector('#edChargeRow');
     const chh = document.querySelector('#edChargeHint');
     const dr = document.querySelector('#edChargeDerivRow');
-    const isGswd = (e.weaponType === 0);
+    const isGswd = (e.weaponType === 0 || e.weaponType === 4);   // 能配蓄力等级的武器（大剑/大锤）
+    const isGsOnly = (e.weaponType === 0);                        // 只有大剑有分段派生
     if (ms) ms.value = gauge ? 'gauge' : 'action';
     if (gr) { gr.hidden = !gauge; gr.value = String(gauge ? e.gaugeRise : 3); }
     if (th) th.hidden = !gauge;
@@ -1386,7 +1387,7 @@ function fillEditor() {
     if (lh) lh.hidden = gauge;
     if (cr) cr.hidden = gauge || !isGswd;
     if (chh) chh.hidden = gauge || !isGswd;
-    if (dr) dr.hidden = gauge || !isGswd || !(e.chargeLevel > 0);
+    if (dr) dr.hidden = gauge || !isGsOnly || !(e.chargeLevel > 0);
   }
   {
     const ms = document.querySelector('#edTrigMode');
