@@ -101,3 +101,19 @@
 仅由环境变量触发、默认关闭：`WSE_STATS`、`WSE_IMPORT`、`WSE_EXPORT`、`WSE_COPYFROM`、`WSE_BANKUI`、`WSE_PLAY`、`WSE_EVAL`。
 它们是回归测试（导出→导入往返、布局自检）的唯一入口，删了就没法自动验证。
 
+
+### 6.10 大锤「超蓄力」判定（粘滞锁存，别再改回窗口判断）
+大锤没有独立的超蓄力动作：126 只出现在"进入超蓄力"（3->0, lmt 49314）和"起手 0->1"（lmt 49315），
+之后整段蓄力仍然是普通 FSM（89/88/90）。所以判定必须是**锁存**：
+见到 126 → sPowerPending=true；蓄力段 >=1 时（或蓄力中按了超蓄力）→ sPowerActive=true；
+蓄力归零 → sPowerActive=false。条目用 ChargePower=1（只普通）/2（只超蓄力）互斥。
+**不许**改成"当前/最近 N ms 有 126 就算超蓄力"——实测必错（窗口一过普通条目又响）。
+
+### 6.11 日志截断用 SetEndOfFile，不要 DeleteFileW
+读取端（GUI / 插件自身）以 FILE_SHARE_READ 打开日志，没有 FILE_SHARE_DELETE →
+DeleteFileW 会静默失败，日志一路涨到几 MB（实测 4.5MB 还在涨）。
+统一写法：CreateFileW(GENERIC_WRITE, FILE_SHARE_READ|WRITE|DELETE) + SetFilePointerEx(0) + SetEndOfFile。
+
+### 6.12 日志里的版本号必须运行时读取
+以前 LogInit() 里写死 WeaponSoundEnhance 2.18 starting，导致排查"是不是 DLL 没更新"时被误导。
+现在用 GetFileVersionInfoW/VerQueryValueW 读自身资源（vcxproj 已加 ersion.lib、cpp 已加 <winver.h>）。

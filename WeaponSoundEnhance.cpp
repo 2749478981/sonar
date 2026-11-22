@@ -63,6 +63,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <winver.h>
 #include <utility>
 
 #pragma comment(lib, "ole32.lib")
@@ -498,7 +499,30 @@ void LogInit()
 {
     gLogPath = gDataDir + L"WeaponSoundEnhance.log";
     ::DeleteFileW(gLogPath.c_str());
-    Log("WeaponSoundEnhance 2.18 starting");
+    {
+        // ★ 版本号从自己的 DLL 资源里读（以前这里写死 "2.18"，日志里永远是老版本，
+        //   排查"是不是新版没生效"时会被误导）。读不到就退回 "?"。
+        std::string ver = "?";
+        wchar_t self[MAX_PATH * 2] = {};
+        if (::GetModuleFileNameW(nullptr, self, MAX_PATH * 2)) {
+            DWORD sz = ::GetFileVersionInfoSizeW(self, nullptr);
+            if (sz) {
+                std::vector<unsigned char> buf(sz);
+                if (::GetFileVersionInfoW(self, 0, sz, buf.data())) {
+                    VS_FIXEDFILEINFO* fi = nullptr;
+                    UINT fl = 0;
+                    if (::VerQueryValueW(buf.data(), L"\\", (void**)&fi, &fl) && fi) {
+                        char tmp[64];
+                        std::snprintf(tmp, sizeof(tmp), "%u.%u.%u.%u",
+                                      (unsigned)(fi->dwFileVersionMS >> 16), (unsigned)(fi->dwFileVersionMS & 0xFFFF),
+                                      (unsigned)(fi->dwFileVersionLS >> 16), (unsigned)(fi->dwFileVersionLS & 0xFFFF));
+                        ver = tmp;
+                    }
+                }
+            }
+        }
+        Log(("WeaponSoundEnhance " + ver + " starting").c_str());
+    }
     // 旧布局提示：wav 还在 plugins\sounds\ 时自动兼容，但建议搬进数据目录
     const std::wstring oldSounds = gModuleDir + L"sounds";
     if (gDataDir != gModuleDir && DirExistsW(oldSounds) &&
@@ -947,7 +971,7 @@ bool WemIsIgnored(long long media) {
 }
 std::uint32_t gGaugePtrOff = 0x76B0;
 std::uint32_t gGaugeValOff = 0x2370;
-std::uint32_t gChargePowerWindowMs = 900;   // 大锤超蓄力（FSM 126）的"前置窗口"：126 过去多久内还算超蓄力
+std::uint32_t gChargePowerWindowMs = 6000;   // 大锤超蓄力（FSM 126）的"前置窗口"：126 过去多久内还算超蓄力
 std::uint32_t gChargeValOff = 0x2358;          // 大剑蓄力等级（与刃级共用 GaugePtrOff）
 std::uint32_t gChargeValOffHammer = 0x235C;    // 大锤蓄力等级（+0x2358 在大锤上是进度 float）
 int           gChargeProbe  = -1;              // ChargeProbe=<武器号>：把 0x2300..0x23C0 的候选值打进日志，-1=关
@@ -3345,6 +3369,38 @@ DWORD WINAPI WorkerProc(LPVOID)
             chargeSeen = player::gCharge;
         }
 
+        // ★ 大锤「超蓄力」状态机（粘滞锁存）
+        //   实测日志：126 只出现在"进入超蓄力"那一下（3->0 fsm=126/lmt=49314）
+        //   和"超蓄力起手"（0->1 fsm=126/lmt=49315），之后整段蓄力用的还是
+        //   普通 FSM（89/88/90）。所以不能按"当前/最近 N ms 有 126"判，
+        //   必须锁存：见到 126 → 记下"下一次蓄力是超蓄力"，蓄力段升起来时
+        //   把这次蓄力序列标成超蓄力，蓄力归零才清。
+        static bool sPowerPending = false;   // 见过 126，等下一次蓄力
+        static bool sPowerActive = false;    // 本次蓄力序列是超蓄力
+        static std::uint32_t sPowerSeenMs = 0;
+        {
+            const std::uint32_t nowPow = static_cast<std::uint32_t>(::GetTickCount64());
+            const bool inPowerFsm = (player::gFsm == kHammerPowerFsm);
+            const bool justLeft126 =
+                (!inPowerFsm && player::gFsmPrev == kHammerPowerFsm &&
+                 nowPow - player::gFsmPrevMs <= gChargePowerWindowMs);
+            const int ccNow = player::gCharge;
+            if (weapon != 4) {
+                sPowerPending = false; sPowerActive = false; sPowerSeenMs = 0;
+            } else {
+                if (inPowerFsm || justLeft126) { sPowerPending = true; sPowerSeenMs = nowPow; }
+                if (ccNow >= 1) {
+                    // 蓄力进行中按了超蓄力 → 本次序列立刻转成超蓄力
+                    if (inPowerFsm) { sPowerActive = true; sPowerPending = false; }
+                    else if (sPowerPending && nowPow - sPowerSeenMs <= gChargePowerWindowMs) {
+                        sPowerActive = true; sPowerPending = false;
+                    }
+                } else {
+                    sPowerActive = false;   // 蓄力归零 → 序列结束
+                }
+            }
+        }
+
         // 蓄力偏移探测（ChargeProbe=<武器号>）：player::Update 里只更新计数器，这里打日志
         {
             static int probeSeen = 0;
@@ -3534,10 +3590,7 @@ DWORD WINAPI WorkerProc(LPVOID)
                     // 这次蓄力是"普通蓄力"还是"超蓄力"？
                     //   大锤的超蓄力不是独立动作：它是"普通蓄力动作 + 前置 FSM 126"，
                     //   而且 126 只持续一小段，所以当前 fsm 或刚刚过去的 fsm 是 126 都算超蓄力。
-                    const bool powerNow =
-                        (player::gFsm == kHammerPowerFsm) ||
-                        (player::gFsmPrev == kHammerPowerFsm &&
-                         (std::uint32_t)::GetTickCount64() - player::gFsmPrevMs <= gChargePowerWindowMs);
+                    const bool powerNow = sPowerActive;
                     // 超蓄力开始的瞬间（已经在满段的情况下）让超蓄力条目补响一次
                     if (powerNow && !e.chargePowerSeen) { e.chargePowerSeen = true; e.chargeLatched = false; }
                     if (!powerNow) e.chargePowerSeen = false;

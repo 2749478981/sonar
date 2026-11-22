@@ -130,8 +130,11 @@ void LogLine(const char* fmt, ...) {
                           st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, body);
     if (n <= 0) return;
 
-    // ★ 体积上限：超过 512KB 就清空重写（不是"只停写"——那样文件会停在几十 MB）。
-    //   读取端（插件/GUI）都有"文件变小 = 被截断"的检测，清了不会重放旧事件。
+    // ★ 体积上限：超过 512KB 就**截断**重写。
+    //   以前是 DeleteFileW，但读取端（GUI / 插件）以 FILE_SHARE_READ 打开着文件，
+    //   没有 FILE_SHARE_DELETE → 删除静默失败，日志一路涨到几 MB。
+    //   现在改成 SetFilePointerEx(0) + SetEndOfFile：不需要删除权限，读取端照样能
+    //   把 fileSize 变小当成"被截断"，不会重放旧事件。
     {
         static uint64_t sLastCheck = 0;
         const uint64_t nowMs = ::GetTickCount64();
@@ -140,7 +143,15 @@ void LogLine(const char* fmt, ...) {
             WIN32_FILE_ATTRIBUTE_DATA fad{};
             if (::GetFileAttributesExW(g_logPath.c_str(), GetFileExInfoStandard, &fad) &&
                 (((uint64_t)fad.nFileSizeHigh << 32) | fad.nFileSizeLow) > (512ull << 10)) {
-                ::DeleteFileW(g_logPath.c_str());   // 清空重写；读取端会把 fileSize 变小当成截断
+                HANDLE ht = ::CreateFileW(g_logPath.c_str(), GENERIC_WRITE,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (ht != INVALID_HANDLE_VALUE) {
+                    LARGE_INTEGER z{};
+                    ::SetFilePointerEx(ht, z, nullptr, FILE_BEGIN);
+                    ::SetEndOfFile(ht);
+                    ::CloseHandle(ht);
+                }
             }
         }
     }
