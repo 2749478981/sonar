@@ -1184,7 +1184,11 @@ const JUDGE_FALLBACK = [
 ];
 
 function blankEntry() {
-  return { name: '', weaponType: ST.weaponFilter >= 0 ? ST.weaponFilter : -1, combo: '',
+  // ★ 新条目默认落在"当前选中的组合"里（以前写死空串 = 永远进默认组合，
+  //   用户在自建组合里点新增，条目却跑到默认组合，看起来像"新增没生效"）。
+  const w0 = ST.weaponFilter;
+  return { name: '', weaponType: w0 >= 0 ? w0 : -1,
+    combo: (w0 >= 0) ? (ST.active[w0] || '') : '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
     def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
@@ -1375,9 +1379,24 @@ function fillEditor() {
   // 触发方式：动作命中（按 FSM/LMT） / 刃级升段（太刀）
   // 刃级升段只受武器过滤，FSM / LMT / 蓄力都不参与 → 选它时把这几行藏起来
   function syncTrig() {
-    const gauge = (e.gaugeRise > 0);
+    // 触发方式下拉按武器给不同选项（不要所有武器共用同一份模板）：
+    //   太刀才有"刃级升到…"；大剑/大锤的蓄力等级是独立一行，不进这个下拉。
     const ms = document.querySelector('#edTrigMode');
     const gr = document.querySelector('#edGaugeRise');
+    if (ms) {
+      const want = (e.weaponType === 3)
+        ? [['action', '动作命中（按 FSM / LMT）'], ['gauge', '刃级升到…（太刀，不看动作）']]
+        : [['action', '动作命中（按 FSM / LMT）']];
+      const sig = want.map(x => x[0]).join(',');
+      if (ms.dataset.sig !== sig) {
+        ms.innerHTML = '';
+        want.forEach(([v, t]) => ms.appendChild(h('option', { value: v }, t)));
+        ms.dataset.sig = sig;
+      }
+      // 武器换成非太刀后，残留的刃级设置会变成看不见的触发方式 → 直接清掉
+      if (e.weaponType !== 3 && e.gaugeRise > 0) e.gaugeRise = 0;
+    }
+    const gauge = (e.gaugeRise > 0);
     const th = document.querySelector('#edTrigHint');
     const rowFsm = document.querySelector('#edRowFsm');
     const rowLmt = document.querySelector('#edRowLmt');
@@ -2111,6 +2130,87 @@ async function previewEntry(index, useDraft) {
   } catch (e) { toast('预览失败：' + (e.message || e), 'err'); }
 }
 
+// 从其他组合导入条目：列出当前武器的其它组合里的条目，勾选后复制到当前组合。
+// （组合之间往往只换音效、触发条件一模一样，重填一遍太蠢）
+async function openCopyFromCombo() {
+  const w = ST.weaponFilter;
+  if (w < 0) { toast('先在左侧选一把武器', 'warn'); return; }
+  const target = ST.active[w] || '';
+  let r;
+  try { r = await Backend.call('entries.list', { weapon: w }); }
+  catch (e) { toast('读取条目失败：' + (e.message || e), 'err'); return; }
+  const others = (r.entries || []).filter(x => (x.combo || '') !== target);
+  if (!others.length) { toast('这把武器只有当前一个组合，没有可导入的条目', 'ok'); return; }
+
+  // 按组合分组
+  const groups = new Map();
+  others.forEach(x => {
+    const c = x.combo || '';
+    if (!groups.has(c)) groups.set(c, []);
+    groups.get(c).push(x);
+  });
+
+  let m = document.getElementById('mCopyFrom');
+  if (!m) {
+    m = h('div', { class: 'modal', id: 'mCopyFrom' });
+    m.appendChild(h('div', { class: 'mbox box' },
+      h('div', { class: 'mtitle' }, '从其他组合导入条目'),
+      h('div', { class: 'hint mk' }, '勾选要复制的条目。导入后它们会进入当前组合，音效路径原样保留。'),
+      h('div', { class: 'picklist', id: 'copyFromList' }),
+      h('div', { class: 'mfoot' },
+        h('button', { 'data-copy-close': '1' }, '取消'),
+        h('button', { class: 'primary', id: 'copyFromOk', disabled: true }, '导入所选'))));
+    document.body.appendChild(m);
+    m.querySelector('[data-copy-close]').onclick = () => m.classList.remove('open');
+    m.addEventListener('click', ev => { if (ev.target === m) m.classList.remove('open'); });
+  }
+  const list = m.querySelector('#copyFromList');
+  const okBtn = m.querySelector('#copyFromOk');
+  list.innerHTML = '';
+  const picked = new Set();
+  const upd = () => {
+    okBtn.textContent = picked.size ? ('导入所选（' + picked.size + '）') : '导入所选';
+    okBtn.disabled = picked.size === 0;
+  };
+  groups.forEach((items, combo) => {
+    const head = h('div', { class: 'pickhead' },
+      h('span', {}, combo ? combo : '默认组合'),
+      h('span', { class: 'dim' }, ' · ' + items.length + ' 条'));
+    list.appendChild(head);
+    items.forEach(it => {
+      const label = h('label', { class: 'pickrow' },
+        h('input', { type: 'checkbox' }),
+        h('span', { class: 'pn' }, it.name || '(未命名)'),
+        h('span', { class: 'dim' }, ' LMT ' + (it.lmtAny ? '不限' : (it.lmt || []).join(',')) +
+          ' · FSM ' + (it.fsmId >= 0 ? it.fsmId : '不限')));
+      const cb = label.querySelector('input');
+      cb.onchange = () => {
+        if (cb.checked) picked.add(it.index); else picked.delete(it.index);
+        upd();
+      };
+      list.appendChild(label);
+    });
+  });
+  upd();
+  okBtn.onclick = async () => {
+    let added = 0;
+    try {
+      for (const [combo, items] of groups) {
+        const idx = items.filter(it => picked.has(it.index)).map(it => it.index);
+        if (!idx.length) continue;
+        const rr = await Backend.call('entries.copyFrom', {
+          sourceWeapon: w, sourceCombo: combo, indexes: idx,
+          targetWeapon: w, targetCombo: target });
+        added += rr.added || 0;
+      }
+      m.classList.remove('open');
+      await refresh();
+      toast(added ? ('已导入 ' + added + ' 条到当前组合（记得保存）') : '没有导入任何条目', added ? 'ok' : 'warn');
+    } catch (e) { toast('导入失败：' + (e.message || e), 'err'); }
+  };
+  m.classList.add('open');
+}
+
 const ACTIONS = {
   'cfg.save':   async () => {
     const r = await Backend.call('config.save', {});
@@ -2173,6 +2273,7 @@ const ACTIONS = {
   },
 
   'entry.add':  async () => { ST.selIndex = -1; renderTable(); await openEditor(null); },
+  'entry.copyFrom': async () => { await openCopyFromCombo(); },
 
 
   'combo.create': async () => {

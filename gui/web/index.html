@@ -6,8 +6,8 @@
 <title>Sonar 配置工具</title>
   <!-- 浮窗页面（#overlay）：必须在首屏渲染前同步打上标记，否则会先闪一下完整界面 -->
   <script>if (location.hash === '#overlay') document.documentElement.className = 'overlay-mode';</script>
-<link rel="stylesheet" href="css/base.css?v=2.39.8">
-<link rel="stylesheet" href="css/themes.css?v=2.39.8">
+<link rel="stylesheet" href="css/base.css?v=2.39.9-dev1">
+<link rel="stylesheet" href="css/themes.css?v=2.39.9-dev1">
 </head>
 <body>
 <!-- 主题装饰层（可爱风显示爪印，其它主题为空） -->
@@ -110,6 +110,7 @@
         <label class="inline" title="只列出当前激活组合的条目；关掉则列出全部，非激活的会打标记">
           <input type="checkbox" id="onlyActive"><span class="lbltxt">只看激活组合</span></label>
         <button class="primary" data-act="entry.add">＋ 新增条目</button>
+        <button data-act="entry.copyFrom" title="把别的组合里的条目复制到当前组合（触发条件往往一样，只换音效）">从其他组合导入</button>
         <button data-act="entry.lint" title="检查当前武器条目里容易踩的坑：重复触发条件、没有音效、音效文件不存在、匹配任意动作">检查配置</button>
         <button data-act="entry.merge" title="把触发条件完全相同的条目合并成一条（音效池取并集），整理重复/多余的配置">合并同条件</button>
         <div class="viewswitch list inline-switch">
@@ -590,8 +591,8 @@
 
 <div class="toasts" id="toasts"></div>
 
-<script src="js/mock.js?v=2.39.8"></script>
-<script src="js/app.js?v=2.39.8"></script>
-<script src="js/capture.js?v=2.39.8"></script>
+<script src="js/mock.js?v=2.39.9-dev1"></script>
+<script src="js/app.js?v=2.39.9-dev1"></script>
+<script src="js/capture.js?v=2.39.9-dev1"></script>
 </body>
 </html>

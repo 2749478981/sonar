@@ -928,6 +928,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                             }).Get());
                     ::SetTimer(hwnd, 10, 1500, nullptr);   // 播起来之后再量一次
                 }
+                // WSE_EVAL=<js>：把一段脚本注入页面并记回执（自动化验证界面行为用，比如
+                // "新增条目落在哪个组合""触发方式下拉有哪些选项"）
+                wchar_t ev2[4096] = {};
+                if (g_web && ::GetEnvironmentVariableW(L"WSE_EVAL", ev2, 4096) > 0 && ev2[0]) {
+                    g_web->ExecuteScript(ev2,
+                        Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                            [](HRESULT hr, LPCWSTR result) -> HRESULT {
+                                LogLine("evalx: hr=0x%08lX r=%s", (unsigned long)hr,
+                                    result ? WideToUtf8(std::wstring(result)).c_str() : "(null)");
+                                return S_OK;
+                            }).Get());
+                    ::SetTimer(hwnd, 11, 1200, nullptr);
+                }
+            } else if (wp == 11) {
+                ::KillTimer(hwnd, 11);
+                ProbePage();
             } else if (wp == 10) {
                 ::KillTimer(hwnd, 10);
                 ProbePage();
@@ -1157,6 +1173,35 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                 LogLine("exportv: %s", g_core.Handle("combo.export", arg).c_str());
             }
         }
+
+        // 设置 WSE_COPYFROM=<武器>|<来源组合>|<下标,下标>|<目标组合> 启动时调 entries.copyFrom
+        // （自动化验证"从其他组合导入条目"用；本来就是给回归测试留的口子）
+        {
+            wchar_t buf[1024] = {};
+            if (::GetEnvironmentVariableW(L"WSE_COPYFROM", buf, 1024) > 0 && buf[0]) {
+                const std::string spec = WideToUtf8(buf);
+                std::vector<std::string> parts;
+                std::string cur;
+                for (char c : spec) { if (c == '|') { parts.push_back(cur); cur.clear(); } else cur += c; }
+                parts.push_back(cur);
+                if (parts.size() >= 4) {
+                    std::string arg = "{\"sourceWeapon\":" + parts[0] +
+                        ",\"sourceCombo\":\"" + parts[1] + "\",\"targetWeapon\":" + parts[0] +
+                        ",\"targetCombo\":\"" + parts[3] + "\",\"indexes\":[";
+                    const std::string& idxs = parts[2];
+                    bool first = true;
+                    std::string num;
+                    for (std::size_t i = 0; i <= idxs.size(); ++i) {
+                        if (i == idxs.size() || idxs[i] == ',') {
+                            if (!num.empty()) { if (!first) arg += ","; arg += num; first = false; num.clear(); }
+                        } else if (idxs[i] >= '0' && idxs[i] <= '9') num += idxs[i];
+                    }
+                    arg += "]}";
+                    LogLine("copyv: %s", g_core.Handle("entries.copyFrom", arg).c_str());
+                    LogLine("stats3: %s", g_core.Handle("diag.combos", "{}").c_str());
+                }
+            }
+        }
     }
     ::ShowWindow(hwnd, SW_SHOW);
     ::UpdateWindow(hwnd);
@@ -1369,6 +1414,12 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                                 if (::GetEnvironmentVariableW(L"WSE_PLAY", pb2, 1024) > 0 && pb2[0]) {
                                     SetTimer(g_hwnd, 9, 3500, nullptr);
                                     LogLine("play: %s", WideToUtf8(std::wstring(pb2)).c_str());
+                                }
+                                // WSE_EVAL 也走同一条注入通道（只给自动化验证用）
+                                wchar_t ev3[4096] = {};
+                                if (::GetEnvironmentVariableW(L"WSE_EVAL", ev3, 4096) > 0 && ev3[0]) {
+                                    SetTimer(g_hwnd, 9, 3500, nullptr);
+                                    LogLine("eval: armed");
                                 }
                             }
                             // 兜底定时器：8 秒内前端没发 ui.ready 就把 WebView 放出来

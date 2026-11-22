@@ -4878,6 +4878,65 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
             return OkJson(d);
         }
 
+        // 从别的组合把条目复制到当前组合：新增条目时可以直接继承已有配置，
+        // 不用重复手填（组合之间玩法相同、只换音效的情况很常见）。
+        if (method == "entries.copyFrom") {
+            const int sw = p.optInt("sourceWeapon", -1);
+            const std::string sc = Trim(p.optStr("sourceCombo"));
+            const int tw = p.optInt("targetWeapon", sw);
+            const std::string tc = Trim(p.optStr("targetCombo"));
+            if (tw < 0 || tw > 13) return ErrJson("目标武器无效");
+            if (sw < 0 || sw > 13) return ErrJson("来源武器无效");
+            const JVal* ji = p.find("indexes");
+            if (!ji || !ji->isArr()) return ErrJson("缺少 indexes 数组");
+
+            // 目标组合里已有的名字：复制过来的重名条目自动编号，避免出现两条一模一样的名字
+            std::vector<std::string> names;
+            for (std::size_t i = 0; i < im->cfg.entries.size(); ++i)
+                if (im->cfg.entries[i].weaponType == tw && im->cfg.entries[i].combo == tc)
+                    names.push_back(im->cfg.entries[i].name);
+
+            int added = 0;
+            for (std::size_t k = 0; k < ji->a.size(); ++k) {
+                const int idx = ji->a[k].asInt(-1);
+                if (idx < 0 || idx >= (int)im->cfg.entries.size()) continue;
+                const SoundEntry& src = im->cfg.entries[idx];
+                if (src.weaponType != sw || src.combo != sc) continue;
+                SoundEntry cp = src;
+                cp.weaponType = tw;
+                cp.combo = tc;
+                bool dup = false;
+                for (std::size_t n = 0; n < names.size(); ++n)
+                    if (names[n] == cp.name) { dup = true; break; }
+                if (dup && !cp.name.empty()) {
+                    int n = 2;
+                    std::string cand;
+                    for (;; ++n) {
+                        cand = src.name + "(" + std::to_string(n) + ")";
+                        bool used = false;
+                        for (std::size_t q = 0; q < names.size(); ++q)
+                            if (names[q] == cand) { used = true; break; }
+                        if (!used) break;
+                    }
+                    cp.name = cand;
+                }
+                names.push_back(cp.name);
+                im->cfg.entries.push_back(cp);
+                ++added;
+            }
+            if (added > 0) {
+                im->dirty = true;
+                im->EnrichNames();
+                im->SetStatus("已从「" + (sc.empty() ? std::string("默认组合") : sc) + "」复制 " +
+                              std::to_string(added) + " 条条目（记得保存）");
+            }
+            JVal d = JVal::obj();
+            d.set("added", JVal(added));
+            d.set("entryCount", JVal((int)im->cfg.entries.size()));
+            d.set("status", JVal(im->status));
+            return OkJson(d);
+        }
+
         // ---- 合并"触发条件完全相同"的条目（同一武器+组合内）----
         //  用户常把同一个条件写成好几条（重复/误操作）：合并后行为等价（音效池取并集），
         //  但配置更清晰，也避免"同一招同时响好几遍"这类困惑。

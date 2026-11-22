@@ -981,3 +981,15 @@ input[type=range]:active::-webkit-slider-thumb{transform:scale(1.12)}
 /* 列宽：替换为 / 名称可压缩，数字列固定，避免把表格撑宽 */
 .banktable td.repcell{max-width:240px; overflow:hidden; text-overflow:ellipsis}
 .banktable td.repcell .repname{max-width:100%}
+
+/* ---- 「从其他组合导入条目」选择弹窗 ---- */
+#mCopyFrom .mbox{width:min(720px,78vw); max-height:82vh; display:flex; flex-direction:column; padding:16px 18px; gap:9px}
+#mCopyFrom .mtitle{font-size:15px; font-weight:var(--fw-strong)}
+#mCopyFrom .mk{margin:0}
+#mCopyFrom .picklist{flex:1; min-height:0; overflow:auto; padding:4px 2px; display:flex; flex-direction:column; gap:2px}
+#mCopyFrom .pickhead{display:flex; align-items:baseline; gap:4px; margin:10px 0 3px; font-size:12px; font-weight:var(--fw-strong); color:var(--muted)}
+#mCopyFrom .pickhead:first-child{margin-top:2px}
+#mCopyFrom .pickrow{display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:var(--radius-ctl); cursor:pointer}
+#mCopyFrom .pickrow:hover{background:var(--row-hover)}
+#mCopyFrom .pickrow .pn{font-weight:500}
+#mCopyFrom .mfoot{display:flex; justify-content:flex-end; gap:8px}
