@@ -1029,10 +1029,11 @@ function renderBankShell() {
     sum.textContent = `已导入 ${BANK.name}.${BANK.ext || 'nbnk'}（${BANK.package ? '文件包 npck' : 'SoundBank'}）　共 ${BANK.media.length} 条　已替换 ${nRep} 条`;
     sum.title = BANK.path;
   }
-  if (step2) { step2.disabled = nRep === 0; step2.classList.toggle('ready', nRep > 0); }
+  // 没有替换也允许导出（= 原样另存一份 nbnk，方便直接拿去改/发给别人）
+  if (step2) { step2.disabled = false; step2.classList.toggle('ready', nRep > 0); }
   if (hint) hint.textContent = nRep
     ? `已选 ${nRep} 条替换 —— 点这里生成 ${BANK.ext || 'nbnk'}`
-    : `已导入 ${BANK.media.length} 条：给要换的那条点「选音频」`;
+    : `没有替换也能导出（会原样另存一份 ${BANK.ext || 'nbnk'}）—— 要换音效就给对应那行点「选音频」`;
 }
 
 // 播放一条 wem（表格里的「播放」按钮和行双击都走这里）。
@@ -1142,7 +1143,12 @@ function renderBank() {
             renderBank();
           } }, '选音频'),
           h('button', { title: '从「音效库」里挑（点着试听，选中后填到这一行）', onclick: async () => {
-            await openLib(null, (p) => { bankSetRep(m.id, p); renderBank(); });
+            await openLib(null, paths => {
+                if (!paths || !paths.length) return;
+                bankSetRep(m.id, paths[0]);
+                renderBank();
+                toast('已替换为：' + libBase(paths[0]), 'ok', 'play');
+              });
             if (!LIB.files.length) toast('音效库是空的：先点「音效库」导入一个文件夹', 'ok');
           } }, '音效库'),
           h('button', { title: '给这条 wem 起个名字（保存进用户名字库，下次自动读取）', onclick: () => openNameDialog(m.id, m.name) }, '命名'),
@@ -1376,27 +1382,41 @@ function fillEditor() {
   $('#edFinalMode').onchange = ev => e.checkMode = ev.target.checked ? 1 : 0;
   $('#edAdvanced').onchange = ev => { ED.judgeBox = ev.target.checked; $('#edJudgeBox').hidden = !ED.judgeBox; };
 
-  // 触发方式：动作命中（按 FSM/LMT） / 刃级升段（太刀）
-  // 刃级升段只受武器过滤，FSM / LMT / 蓄力都不参与 → 选它时把这几行藏起来
+  // 触发方式：动作命中（按 FSM/LMT） / 刃级升段（太刀） / 超蓄力（大锤）
+  // 刃级升段只受武器过滤，FSM / LMT / 蓄力都不参与 → 选它时把这几行藏起来。
+  // 超蓄力（power charge）本质是大锤的一个动作：FSMId = 126，所以选它就把 FSMId 填成 126、LMT 不限。
+  const HAMMER_POWER_FSM = 126;
+  function trigModeOf() {
+    if (e.gaugeRise > 0) return 'gauge';
+    if (e.weaponType === 4 && e.fsmId === HAMMER_POWER_FSM) return 'power';
+    return 'action';
+  }
   function syncTrig() {
     // 触发方式下拉按武器给不同选项（不要所有武器共用同一份模板）：
-    //   太刀才有"刃级升到…"；大剑/大锤的蓄力等级是独立一行，不进这个下拉。
+    //   太刀才有"刃级升到…"，大锤才有"超蓄力"；蓄力等级是独立一行，不进这个下拉。
     const ms = document.querySelector('#edTrigMode');
     const gr = document.querySelector('#edGaugeRise');
+    const mode = trigModeOf();
     if (ms) {
       const want = (e.weaponType === 3)
         ? [['action', '动作命中（按 FSM / LMT）'], ['gauge', '刃级升到…（太刀，不看动作）']]
-        : [['action', '动作命中（按 FSM / LMT）']];
+        : (e.weaponType === 4)
+          ? [['action', '动作命中（按 FSM / LMT）'], ['power', '超蓄力（锤子发光那一刻）']]
+          : [['action', '动作命中（按 FSM / LMT）']];
       const sig = want.map(x => x[0]).join(',');
       if (ms.dataset.sig !== sig) {
         ms.innerHTML = '';
         want.forEach(([v, t]) => ms.appendChild(h('option', { value: v }, t)));
         ms.dataset.sig = sig;
       }
-      // 武器换成非太刀后，残留的刃级设置会变成看不见的触发方式 → 直接清掉
+      // 换武器后残留的"看不见的触发方式"要清掉：非太刀不留刃级、非大锤不留超蓄力
       if (e.weaponType !== 3 && e.gaugeRise > 0) e.gaugeRise = 0;
+      if (e.weaponType !== 4 && e.fsmId === HAMMER_POWER_FSM) e.fsmId = -1;
+      ms.value = (mode === 'gauge' || mode === 'power') ? mode : 'action';
     }
-    const gauge = (e.gaugeRise > 0);
+    const gauge = (mode === 'gauge');
+    const power = (mode === 'power');
+    const stateOnly = gauge || power;          // 状态型触发：不看 FSM / LMT / 蓄力
     const th = document.querySelector('#edTrigHint');
     const rowFsm = document.querySelector('#edRowFsm');
     const rowLmt = document.querySelector('#edRowLmt');
@@ -1406,33 +1426,48 @@ function fillEditor() {
     const dr = document.querySelector('#edChargeDerivRow');
     const isGswd = (e.weaponType === 0 || e.weaponType === 4);   // 能配蓄力等级的武器（大剑/大锤）
     const isGsOnly = (e.weaponType === 0);                        // 只有大剑有分段派生
-    if (ms) ms.value = gauge ? 'gauge' : 'action';
     if (gr) { gr.hidden = !gauge; gr.value = String(gauge ? e.gaugeRise : 3); }
-    if (th) th.hidden = !gauge;
-    if (rowFsm) rowFsm.style.display = (gauge || isWem) ? 'none' : '';
-    if (rowLmt) rowLmt.hidden = gauge;
-    if (lh) lh.hidden = gauge;
-    if (cr) cr.hidden = gauge || !isGswd;
-    if (chh) chh.hidden = gauge || !isGswd;
-    if (dr) dr.hidden = gauge || !isGsOnly || !(e.chargeLevel > 0);
+    if (th) {
+      th.hidden = !stateOnly;
+      if (gauge) th.textContent = '刃级升到该颜色的那一瞬间播放一次；掉刃或换武器后重新计。不看 FSM / LMT —— 升刃时正在打哪一招并不固定。';
+      else if (power) th.textContent = '大锤进入超蓄力的那一瞬间播放一次（动作 126 已经自动填好，LMT 不限）。蓄力等级是另一件事，用上面那行单独配。';
+    }
+    if (rowFsm) rowFsm.style.display = (stateOnly || isWem) ? 'none' : '';
+    if (rowLmt) rowLmt.hidden = stateOnly;
+    if (lh) lh.hidden = stateOnly;
+    if (cr) cr.hidden = stateOnly || !isGswd;
+    if (chh) chh.hidden = stateOnly || !isGswd;
+    if (dr) dr.hidden = stateOnly || !isGsOnly || !(e.chargeLevel > 0);
   }
   {
     const ms = document.querySelector('#edTrigMode');
     const gr = document.querySelector('#edGaugeRise');
+    const setCtl = () => {
+      const fi = $('#edFsm'), li = $('#edLmt'), la = $('#edLmtAny'), cs = $('#edCharge'), cb = $('#edChargeCut');
+      if (fi) fi.value = String(e.fsmId);
+      if (li) li.value = (e.lmt && e.lmt.length) ? e.lmt.join(', ') : '';
+      if (la) la.checked = !!e.lmtAny;
+      if (cs) cs.value = String(e.chargeLevel || 0);
+      if (cb) cb.checked = !!e.chargeCut;
+    };
     if (ms) ms.onchange = () => {
-      if (ms.value === 'gauge') {
+      const v = ms.value;
+      if (v === 'gauge') {
         if (e.weaponType !== 3) toast('刃级只有太刀有：别的武器选了不会触发', 'warn');
         if (!(e.gaugeRise > 0)) e.gaugeRise = gr ? (parseInt(gr.value, 10) || 3) : 3;
         // 升刃不看动作：把动作条件清干净，免得配了个永不命中的 FSM
         e.fsmId = -1; e.lmt = []; e.lmtAny = true; e.chargeLevel = 0; e.chargeCut = false;
-        const fi = $('#edFsm'), li = $('#edLmt'), la = $('#edLmtAny'), cs = $('#edCharge'), cb = $('#edChargeCut');
-        if (fi) fi.value = -1;
-        if (li) li.value = '';
-        if (la) la.checked = true;
-        if (cs) cs.value = '0';
-        if (cb) cb.checked = false;
+        setCtl();
+      } else if (v === 'power') {
+        // 超蓄力 = 大锤的 126 号动作：只填 FSM，LMT 不限，别加蓄力等级
+        e.gaugeRise = 0;
+        e.fsmId = HAMMER_POWER_FSM; e.lmt = []; e.lmtAny = true;
+        e.chargeLevel = 0; e.chargeCut = false;
+        setCtl();
       } else {
         e.gaugeRise = 0;
+        if (e.fsmId === HAMMER_POWER_FSM) e.fsmId = -1;   // 退出超蓄力时别留着 126
+        setCtl();
       }
       syncTrig();
       lmtHint();
@@ -2052,13 +2087,15 @@ function libRender() {
   if (empty) empty.hidden = LIB.files.length > 0;
   if (paths) paths.textContent = LIB.files.length ? `共 ${LIB.files.length} 个音效` : '';
 
-  // 选择模式（从条目里点「从音效库选」进来的）：显示勾选 + 加入按钮
+  // 选择模式：条目池「从音效库选」(pickMode，可多选) 或音效包页某一行「音效库」(onPick，单选)
+  const single = !!(LIB.onPick && !LIB.pickMode);
+  const pickable = !!(LIB.pickMode || LIB.onPick);
   const addBtn = $('#libAddBtn');
-  if (addBtn) addBtn.hidden = !LIB.pickMode;
+  if (addBtn) addBtn.hidden = single || !pickable;
   const pc = $('#libPickCount');
   if (pc) pc.textContent = String(LIB.picked.size);
   const title = $('#libTitle');
-  if (title) title.textContent = LIB.pickMode ? '从音效库选音效' : '音效库';
+  if (title) title.textContent = single ? '点一下 = 替换成这个音效' : (pickable ? '从音效库选音效' : '音效库');
 
   list.forEach(p => {
     const isPlaying = (LIB.playing === p);
@@ -2073,11 +2110,17 @@ function libRender() {
       h('td', { class: 'dim', style: 'font-size:11px' }, libDir(p)),
       h('td', { class: 'right' }, h('div', { class: 'acts' },
         h('button', { onclick: ev => { ev.stopPropagation(); libPlay(p); } }, isPlaying ? '重播' : '试听'),
-        LIB.pickMode
-          ? h('button', { onclick: ev => { ev.stopPropagation(); libTogglePick(p); } }, picked ? '取消' : '选择')
+        pickable
+          ? (single
+            ? h('button', { onclick: ev => { ev.stopPropagation(); libChooseOne(p); } }, '用这个')
+            : h('button', { onclick: ev => { ev.stopPropagation(); libTogglePick(p); } }, picked ? '取消' : '选择'))
           : h('button', { onclick: ev => { ev.stopPropagation(); libRemove(p); } }, '移除'))));
-    // 整行点一下 = 试听（下一条自动打断上一条）
-    tr.onclick = () => { if (LIB.pickMode) libTogglePick(p); else libPlay(p); };
+    // 整行点一下 = 试听（下一条自动打断上一条）；选择模式下 = 选中（单选模式直接替换）
+    tr.onclick = () => {
+      if (single) libChooseOne(p);
+      else if (pickable) libTogglePick(p);
+      else libPlay(p);
+    };
     body.appendChild(tr);
   });
 }
@@ -2097,6 +2140,15 @@ async function libPlay(p) {
 function libTogglePick(p) {
   if (LIB.picked.has(p)) LIB.picked.delete(p); else LIB.picked.add(p);
   libRender();
+}
+
+// 单选模式（音效包页的某一行）：点一下就替换成这个，关掉弹窗
+function libChooseOne(p) {
+  const cb = LIB.onPick;
+  LIB.pickMode = null; LIB.onPick = null; LIB.picked = new Set();
+  closeModals();
+  libRender();
+  if (typeof cb === 'function') cb([p]);
 }
 
 async function libRemove(p) {
@@ -2649,14 +2701,19 @@ async function bankShowHistory() {
     btn.onclick = () => {
       BANK.reps = {};
       (h.reps || []).forEach(x => {
-        if (x.media > 0 && x.wem) {
+        // 优先用原音频（src）；老记录只有 wem（可能是已清理的临时文件）
+        const p = x.src || x.wem;
+        if (x.media > 0 && p) {
           BANK.reps[x.media] = {
-            path: x.wem,
+            path: p,
             vol: (typeof x.vol === 'number' ? x.vol : 100),
             delay: (typeof x.delay === 'number' ? x.delay : 0),
           };
         }
       });
+      BANK.histSaved = true;
+      renderBank();
+      toast(`已恢复 ${n} 个替换（若某条原音频已移动，可重新选音频）`, 'ok');
       BANK.histSaved = true;
       renderBank();
       toast(`已恢复 ${n} 个替换（文件不在的会转换时报错，可重新选音频）`, 'ok');
@@ -2850,6 +2907,8 @@ async function openBankPath(path) {
   }
 }
 window.__openBank = openBankPath;
+// 测试/排查用：window.__openLib(null, fn) 打开音效库并走"选择"模式
+window.__openLib = openLib;
 
 // 自动化验证入口：#bankui=<nbnk 路径>（宿主用 WSE_BANKUI 环境变量拼进来的）
 // —— 只为脚本化截图/自检服务，正常用户走界面按钮。
@@ -2913,7 +2972,6 @@ ACTIONS['bank.openOut'] = async () => {
 ACTIONS['bank.export'] = async () => {
   if (!BANK.path) { toast('先导入 nbnk / npck', 'err'); return; }
   const mediaIds = Object.keys(BANK.reps);
-  if (!mediaIds.length) { toast('还没有选任何替换音效', 'err'); return; }
   const btn = ($('#bankExportBtn2') || $('#bankExportBtn'));
   btn.disabled = true;
   try {
@@ -2954,14 +3012,18 @@ ACTIONS['bank.export'] = async () => {
       vol: bankRep(id) ? bankRep(id).vol : 100,
       delay: bankRep(id) ? bankRep(id).delay : 0,
     }));
-    if (!reps.length) { toast('转换后没有可用的 wem', 'err'); return; }
+    if (mediaIds.length && !reps.length) { toast('转换后没有可用的 wem', 'err'); return; }
 
-    // 2) 导出 nbnk（写新文件，不动游戏原文件）
+    // 2) 导出 nbnk（写新文件，不动游戏原文件）；replacements 为空时后端原样复制
     const out = await Backend.call('bank.export', { path: BANK.path, replacements: reps });
-    toast(`已导出 ${out.replaced} 条 → ${out.out}；进游戏切换一次武器种类再切回即可生效（不用重启）`, 'ok');
+    toast(out.copied
+      ? `没有替换任何音效：已原样导出 → ${out.out}`
+      : `已导出 ${out.replaced} 条 → ${out.out}；进游戏切换一次武器种类再切回即可生效（不用重启）`, 'ok');
     // ★ 记住这次的替换：下次导入同一个 nbnk 会显示"上次替换了哪些 wem"，并可一键恢复
-    try {
-      await Backend.call('bank.history.save', { path: BANK.path, reps });
+    //   注意要存**原音频**路径（bankRepsToArr 给的就是原音频），不能存 wemkit\tmp 里的临时 wem
+    //   —— 那些 wem 在下次启动时会被清掉，恢复后就会出现"听不了替换音"。
+    if (reps.length) try {
+      await Backend.call('bank.history.save', { path: BANK.path, reps: bankRepsToArr() });
       BANK.histSaved = true;
       bankShowHistory();
     } catch (err) {}

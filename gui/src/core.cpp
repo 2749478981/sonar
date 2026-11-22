@@ -1520,6 +1520,8 @@ struct UiPrefs {
     std::string ffmpegPath;    // 用户手动指定的 ffmpeg.exe（空 = 自动查找）
     std::string wwisePath;     // 用户手动指定的 WwiseConsole.exe（空 = 自动查找）
     std::string gameDir;       // 用户手动指定的游戏根目录（空 = 自动查找）
+    std::string lastBankDir;   // 上次导入/导出 nbnk 的目录（与音效目录分开记）
+    std::string lastSoundDir;  // 上次选音频 / 导入音效库文件夹的目录
 
     UiPrefs() {
         colWidths.set("name", JVal(180));
@@ -2304,6 +2306,8 @@ struct Core::Impl {
         prefs.ffmpegPath = v.optStr("ffmpegPath");
         prefs.wwisePath = v.optStr("wwisePath");
         prefs.gameDir = v.optStr("gameDir");
+        prefs.lastBankDir = v.optStr("lastBankDir");
+        prefs.lastSoundDir = v.optStr("lastSoundDir");
     }
 
     void SaveUiPrefs() {
@@ -2320,6 +2324,8 @@ struct Core::Impl {
         v.set("ffmpegPath", JVal(prefs.ffmpegPath));
         v.set("wwisePath", JVal(prefs.wwisePath));
         v.set("gameDir", JVal(prefs.gameDir));
+        v.set("lastBankDir", JVal(prefs.lastBankDir));
+        v.set("lastSoundDir", JVal(prefs.lastSoundDir));
         FsWrite(uiPath, JsonDump(v));
         uiDirty = false;
     }
@@ -2338,6 +2344,8 @@ struct Core::Impl {
         v.set("ffmpegPath", JVal(prefs.ffmpegPath));
         v.set("wwisePath", JVal(prefs.wwisePath));
         v.set("gameDir", JVal(prefs.gameDir));
+        v.set("lastBankDir", JVal(prefs.lastBankDir));
+        v.set("lastSoundDir", JVal(prefs.lastSoundDir));
         return v;
     }
 
@@ -5380,7 +5388,12 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
 
             if (method == "lib.import") {
                 std::string dir = Trim(p.optStr("dir"));
-                if (dir.empty()) dir = PickFolder(owner, Utf8ToWide(im->exeDir));
+                if (dir.empty()) {
+                    const std::wstring libInit = im->prefs.lastSoundDir.empty()
+                        ? Utf8ToWide(im->exeDir) : Utf8ToWide(im->prefs.lastSoundDir);
+                    dir = PickFolder(owner, libInit);
+                }
+                if (!dir.empty()) { im->prefs.lastSoundDir = AsDirUtf8(dir); im->SaveUiPrefs(); }
                 if (dir.empty()) {
                     JVal d = JVal::obj();
                     d.set("cancelled", JVal(true));
@@ -6861,9 +6874,12 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
 
         if (method == "bank.pick") {
             std::vector<std::string> multi;
+            const std::wstring bankInit = im->prefs.lastBankDir.empty()
+                ? std::wstring() : Utf8ToWide(im->prefs.lastBankDir);
             const std::string p1 = OpenFileDialog(OwnerOf(owner),
-                L"Wwise 音频文件 (*.nbnk;*.npck;*.bnk)\0*.nbnk;*.npck;*.bnk\0Wwise SoundBank (*.nbnk;*.bnk)\0*.nbnk;*.bnk\0Wwise File Package (*.npck)\0*.npck\0所有文件 (*.*)\0*.*\0", nullptr, L"nbnk",
+                L"Wwise 音频文件 (*.nbnk;*.npck;*.bnk)\0*.nbnk;*.npck;*.bnk\0Wwise SoundBank (*.nbnk;*.bnk)\0*.nbnk;*.bnk\0Wwise File Package (*.npck)\0*.npck\0所有文件 (*.*)\0*.*\0", bankInit.empty() ? nullptr : bankInit.c_str(), L"nbnk",
                 false, multi);
+            if (!p1.empty()) { im->prefs.lastBankDir = AsDirUtf8(p1); im->SaveUiPrefs(); }
             JVal d = JVal::obj();
             d.set("cancelled", JVal(p1.empty()));
             d.set("path", JVal(ToSlash(p1)));
@@ -6872,9 +6888,12 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
 
         if (method == "audio.pickMulti") {
             std::vector<std::string> multi;
+            const std::wstring sndInit = im->prefs.lastSoundDir.empty()
+                ? std::wstring() : Utf8ToWide(im->prefs.lastSoundDir);
             const std::string p1 = OpenFileDialog(OwnerOf(owner),
                 L"音频文件 (*.wav;*.mp3;*.ogg;*.flac)\0*.wav;*.mp3;*.ogg;*.flac\0"
-                L"所有文件 (*.*)\0*.*\0", nullptr, L"wav", true, multi);
+                L"所有文件 (*.*)\0*.*\0", sndInit.empty() ? nullptr : sndInit.c_str(), L"wav", true, multi);
+            if (!p1.empty()) { im->prefs.lastSoundDir = AsDirUtf8(p1); im->SaveUiPrefs(); }
             JVal arr = JVal::arr();
             if (!p1.empty()) arr.push(JVal(ToSlash(p1)));
             for (std::size_t i = 0; i < multi.size(); ++i) arr.push(JVal(ToSlash(multi[i])));

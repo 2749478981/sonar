@@ -221,6 +221,9 @@ int            gPrevEntryFsm = -1;
 int            gPrevEntryLmt = -1;
 std::int32_t   gCharge = -1;
 std::uint32_t  gChargeValOff = 0x2358;   // 别用 0x2370：大剑上它只从 2 起跳，分不出 1 蓄和没蓄
+// 大锤蓄力等级在**另一个偏移**（+0x2358 在大锤上是"蓄力进度" float 0..1，不是等级）
+// 实测（v2.39.9 之前那次抓取）：wobj+0x235C 是 int 0..3，跟着蓄力 1→2→3→0 走。
+std::uint32_t  gChargeValOffHammer = 0x235C;
 int            gChargeProbe  = -1;       // ChargeProbe=<武器号>：把 0x2300..0x23C0 的候选值写进 gProbeLine
 int            gProbeSeq     = 0;        // 探测行更新次数（worker 循环据此打日志，本文件前面还没有 LogD）
 std::string    gProbeLine;
@@ -319,14 +322,14 @@ void Refresh()
         }
     }
 
-    // 大剑 / 大锤蓄力等级，复用同一个对象指针
-    //   大剑：0x2358 实测为 0..3（无蓄力=0）
-    //   大锤：先按同一个字段试读（同一段结构里"武器专属值"是复用的），
-    //         若某台机器上读不到，用 ini 的 ChargeProbe=<武器号> 打日志定位
+    // 大剑 / 大锤蓄力等级，复用同一个对象指针，但**值偏移不同**
+    //   大剑（0）：+0x2358 为 int 0..3（无蓄力=0）
+    //   大锤（4）：+0x2358 是蓄力进度 float(0..1)，等级在 +0x235C（int 0..3）
     if (gWeapon == 0 || gWeapon == 4) {
         std::uintptr_t sp = 0;
         if (mem::ReadVal(entity + gGaugePtrOff, sp) && sp) {
-            const int v = mem::ReadI32(sp + gChargeValOff, -1);
+            const std::uint32_t off = (gWeapon == 4) ? gChargeValOffHammer : gChargeValOff;
+            const int v = mem::ReadI32(sp + off, -1);
             if (v >= 0 && v <= 3) gCharge = v;
         }
     }
@@ -929,7 +932,8 @@ bool WemIsIgnored(long long media) {
 }
 std::uint32_t gGaugePtrOff = 0x76B0;
 std::uint32_t gGaugeValOff = 0x2370;
-std::uint32_t gChargeValOff = 0x2358;          // 大剑/大锤蓄力等级（与刃级共用 GaugePtrOff）
+std::uint32_t gChargeValOff = 0x2358;          // 大剑蓄力等级（与刃级共用 GaugePtrOff）
+std::uint32_t gChargeValOffHammer = 0x235C;    // 大锤蓄力等级（+0x2358 在大锤上是进度 float）
 int           gChargeProbe  = -1;              // ChargeProbe=<武器号>：把 0x2300..0x23C0 的候选值打进日志，-1=关
 std::uint32_t gFsmTargetOff = 0x6274;          // FSM target 值偏移
 std::uintptr_t gQuestRoot   = 0x14500ED30ULL;  // 任务结构入口
@@ -2125,6 +2129,7 @@ void LoadConfig()
                 else if (key == "GaugePtrOff") { std::uintptr_t v = ParseHex(val); if (v) gGaugePtrOff = (std::uint32_t)v; }
                 else if (key == "GaugeValOff") { std::uintptr_t v = ParseHex(val); if (v) gGaugeValOff = (std::uint32_t)v; }
                 else if (key == "ChargeValOff") gChargeValOff = (std::uint32_t)ParseHex(val);
+    else if (key == "ChargeValOffHammer") gChargeValOffHammer = (std::uint32_t)ParseHex(val);
                 else if (key == "ChargeProbe")  gChargeProbe  = std::atoi(val.c_str());
                 else if (key == "FsmTargetOff") gFsmTargetOff = (std::uint32_t)ParseHex(val);
                 else if (key == "QuestRoot")    gQuestRoot    = ParseHex(val);
@@ -2332,6 +2337,7 @@ void LoadConfig()
     player::gGaugePtrOff = gGaugePtrOff;
     player::gGaugeValOff = gGaugeValOff;
     player::gChargeValOff = gChargeValOff;
+    player::gChargeValOffHammer = gChargeValOffHammer;
     player::gChargeProbe  = gChargeProbe;
     player::gFsmTargetOff = gFsmTargetOff;
     player::gQuestRoot    = gQuestRoot;
