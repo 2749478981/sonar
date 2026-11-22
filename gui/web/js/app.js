@@ -1280,7 +1280,24 @@ function fillEditor() {
     const cutBox = document.querySelector('#edChargeCut');
     const isChargeWeapon = (e.weaponType === 0 || e.weaponType === 4);   // 大剑 / 大锤
     const isGs = (e.weaponType === 0);
-    const showDeriv = () => { if (derivRow) derivRow.hidden = !isGs || !(e.chargeLevel > 0); };
+    const isHammer = (e.weaponType === 4);
+    // 蓄力派生：
+    //   大剑 = 85/86/102（普通/强/真蓄力的动作号，实测）
+    //   大锤 = 普通蓄力（只看段数，不收 FSM） / 超蓄力（实测 FSM 126）
+    const known = isGs ? ['85', '86', '102'] : (isHammer ? ['seg', '126'] : []);
+    const labels = isGs
+      ? ['蓄力（FSM 85）', '强蓄力（FSM 86）', '真蓄力（FSM 102）']
+      : ['普通蓄力（只看段数）', '超蓄力（FSM 126）'];
+    const showDeriv = () => { if (derivRow) derivRow.hidden = !isChargeWeapon || !(e.chargeLevel > 0); };
+    if (derivSel && derivRow) {
+      const sig = known.join(',');
+      if (derivSel.dataset.sig !== sig) {
+        derivSel.innerHTML = '';
+        derivSel.appendChild(h('option', { value: '' }, '不限'));
+        known.forEach((v, i) => derivSel.appendChild(h('option', { value: v }, labels[i])));
+        derivSel.dataset.sig = sig;
+      }
+    }
     if (chargeRow) chargeRow.hidden = !isChargeWeapon;
     showDeriv();
     if (chargeHint) chargeHint.hidden = !isChargeWeapon;
@@ -1299,13 +1316,22 @@ function fillEditor() {
       cutBox.onchange = () => { e.chargeCut = cutBox.checked; };
     }
     if (derivSel) {
-      // 固定值：85/86/102 是实测到的蓄力过渡 FSM；选了必须 LMT 不限才匹配
-      const known = [85, 86, 102];
-      const cur = (e.chargeLevel > 0 && (!e.lmt || !e.lmt.length) && known.indexOf(e.fsmId) >= 0)
-        ? String(e.fsmId) : '';
+      // cur：大剑 = FSM 85/86/102；大锤 = '126'（超蓄力）或 'seg'（普通蓄力：FSM 不限、只看段数）
+      let cur = '';
+      if (e.chargeLevel > 0 && (!e.lmt || !e.lmt.length)) {
+        if (isHammer) {
+          if (e.fsmId === 126) cur = '126';
+          else if (!(e.fsmId >= 0)) cur = 'seg';
+        } else if (known.indexOf(String(e.fsmId)) >= 0) {
+          cur = String(e.fsmId);
+        }
+      }
       derivSel.value = cur;
       derivSel.onchange = () => {
-        const v = derivSel.value ? parseInt(derivSel.value, 10) : -1;
+        const raw = derivSel.value;
+        let v = -1;
+        if (raw === 'seg') v = -1;                       // 普通蓄力：不加动作过滤，只按段数
+        else if (raw) v = parseInt(raw, 10);
         e.fsmId = v;
         e.lmt = []; e.lmtAny = true;
         const fi = document.querySelector('#edFsm');
@@ -1382,42 +1408,28 @@ function fillEditor() {
   $('#edFinalMode').onchange = ev => e.checkMode = ev.target.checked ? 1 : 0;
   $('#edAdvanced').onchange = ev => { ED.judgeBox = ev.target.checked; $('#edJudgeBox').hidden = !ED.judgeBox; };
 
-  // 触发方式：动作命中（按 FSM/LMT） / 刃级升段（太刀） / 超蓄力（大锤）
+  // 触发方式：动作命中（按 FSM/LMT） / 刃级升段（太刀）
   // 刃级升段只受武器过滤，FSM / LMT / 蓄力都不参与 → 选它时把这几行藏起来。
-  // 超蓄力（power charge）本质是大锤的一个动作：实测捕获到的是 FSMId=126、LMT=49315，
-  //   所以选它就把这两项填好，行还是显示出来（LMT 允许改，改成不限也行）。
-  const HAMMER_POWER_FSM = 126;
-  const HAMMER_POWER_LMT = 49315;
-  function trigModeOf() {
-    if (e.gaugeRise > 0) return 'gauge';
-    if (e.weaponType === 4 && e.fsmId === HAMMER_POWER_FSM) return 'power';
-    return 'action';
-  }
+  // 蓄力相关（含大锤的普通蓄力/超蓄力）一律走下面「蓄力等级 + 蓄力派生」两行，不往这个下拉里塞。
   function syncTrig() {
-    // 触发方式下拉按武器给不同选项（不要所有武器共用同一份模板）：
-    //   太刀才有"刃级升到…"，大锤才有"超蓄力"；蓄力等级是独立一行，不进这个下拉。
+    // 触发方式下拉按武器给不同选项（不要所有武器共用同一份模板）：只有太刀多一个"刃级升到…"
     const ms = document.querySelector('#edTrigMode');
     const gr = document.querySelector('#edGaugeRise');
-    const mode = trigModeOf();
     if (ms) {
       const want = (e.weaponType === 3)
         ? [['action', '动作命中（按 FSM / LMT）'], ['gauge', '刃级升到…（太刀，不看动作）']]
-        : (e.weaponType === 4)
-          ? [['action', '动作命中（按 FSM / LMT）'], ['power', '超蓄力（锤子发光那一刻）']]
-          : [['action', '动作命中（按 FSM / LMT）']];
+        : [['action', '动作命中（按 FSM / LMT）']];
       const sig = want.map(x => x[0]).join(',');
       if (ms.dataset.sig !== sig) {
         ms.innerHTML = '';
         want.forEach(([v, t]) => ms.appendChild(h('option', { value: v }, t)));
         ms.dataset.sig = sig;
       }
-      // 换武器后残留的"看不见的触发方式"要清掉：非太刀不留刃级、非大锤不留超蓄力
+      // 换武器后残留的"看不见的触发方式"要清掉：非太刀不留刃级
       if (e.weaponType !== 3 && e.gaugeRise > 0) e.gaugeRise = 0;
-      if (e.weaponType !== 4 && e.fsmId === HAMMER_POWER_FSM) e.fsmId = -1;
-      ms.value = (mode === 'gauge' || mode === 'power') ? mode : 'action';
+      ms.value = (e.gaugeRise > 0) ? 'gauge' : 'action';
     }
-    const gauge = (mode === 'gauge');
-    const power = (mode === 'power');
+    const gauge = (e.gaugeRise > 0);
     const stateOnly = gauge;                   // 刃级是纯状态触发：不看 FSM / LMT / 蓄力
     const th = document.querySelector('#edTrigHint');
     const rowFsm = document.querySelector('#edRowFsm');
@@ -1427,7 +1439,6 @@ function fillEditor() {
     const chh = document.querySelector('#edChargeHint');
     const dr = document.querySelector('#edChargeDerivRow');
     const isGswd = (e.weaponType === 0 || e.weaponType === 4);   // 能配蓄力等级的武器（大剑/大锤）
-    const isGsOnly = (e.weaponType === 0);                        // 只有大剑有分段派生
     if (gr) { gr.hidden = !gauge; gr.value = String(gauge ? e.gaugeRise : 3); }
     if (th) {
       th.hidden = !gauge;
@@ -1438,7 +1449,7 @@ function fillEditor() {
     if (lh) lh.hidden = stateOnly;
     if (cr) cr.hidden = gauge || !isGswd;
     if (chh) chh.hidden = gauge || !isGswd;
-    if (dr) dr.hidden = gauge || !isGsOnly || !(e.chargeLevel > 0);
+    if (dr) dr.hidden = gauge || !isGswd || !(e.chargeLevel > 0);
   }
   {
     const ms = document.querySelector('#edTrigMode');
@@ -1459,15 +1470,8 @@ function fillEditor() {
         // 升刃不看动作：把动作条件清干净，免得配了个永不命中的 FSM
         e.fsmId = -1; e.lmt = []; e.lmtAny = true; e.chargeLevel = 0; e.chargeCut = false;
         setCtl();
-      } else if (v === 'power') {
-        // 超蓄力 = 大锤的 126 号动作（实测捕获到 LMT 49315）：填好这两项，行照常显示，可以改成不限
-        e.gaugeRise = 0;
-        e.fsmId = HAMMER_POWER_FSM; e.lmt = [HAMMER_POWER_LMT]; e.lmtAny = false;
-        e.chargeLevel = 0; e.chargeCut = false;
-        setCtl();
       } else {
         e.gaugeRise = 0;
-        if (e.fsmId === HAMMER_POWER_FSM) e.fsmId = -1;   // 退出超蓄力时别留着 126
         setCtl();
       }
       syncTrig();
