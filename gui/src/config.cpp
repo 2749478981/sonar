@@ -383,6 +383,11 @@ bool LoadConfig(const std::string& path, Config& cfg) {
             cur.chargeLevel = (cl >= 1 && cl <= 3) ? cl : 0;
         } else if (key == "ChargeCut") {
             cur.chargeCut = std::atoi(val.c_str()) != 0;
+        } else if (key == "ChargePower") {
+            const std::string cp = ToLower(Trim(val));
+            int v = std::atoi(cp.c_str());
+            if (v < 0 || v > 2) { if (cp == "normal") v = 1; else if (cp == "power") v = 2; else v = 0; }
+            cur.chargePower = v;
         } else if (key == "GaugeRise") {
             const int gr = std::atoi(val.c_str());
             cur.gaugeRise = (gr >= 1 && gr <= 3) ? gr : 0;
@@ -509,6 +514,7 @@ static void WriteEntry(const SoundEntry& e, int n, std::string& o) {
     if (e.prevLmt >= 0) o += "PrevLmt=" + std::to_string(e.prevLmt) + "\r\n";
     if (e.chargeLevel > 0) o += "ChargeLevel=" + std::to_string(e.chargeLevel) + "\r\n";
     if (e.chargeCut) o += "ChargeCut=1\r\n";
+    if (e.chargePower > 0) o += "ChargePower=" + std::to_string(e.chargePower) + "\r\n";
     if (e.gaugeRise > 0) o += "GaugeRise=" + std::to_string(e.gaugeRise) + "\r\n";
     o += "WeaponType=" + std::to_string(e.weaponType) + "\r\n";
     o += LmtLine(e) + "\r\n";

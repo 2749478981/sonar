@@ -59,6 +59,8 @@ struct SoundEntry {
     //   同一段可以在不同招式/过渡里配不同音效（派生进度细分）。0 = 普通条目。
     int chargeLevel = 0;
     bool chargeCut = false;     // ChargeCut=1：本段响时先停掉上一段蓄力音效
+    // ChargePower=1/2：只普通蓄力 / 只超蓄力（大锤＝普通蓄力动作 + 前置 FSM 126；0=不限）
+    int chargePower = 0;
     // ★ 刃级升段条目（GaugeRise=1/2/3）：太刀刃级升到该级的瞬间触发
     //   （1=白刃 2=黄刃 3=红刃）。不看 FSM/LMT —— 升刃那一下在哪一招不固定，
     //   所以"开红刃放 BGM"只要一条。0 = 普通条目。

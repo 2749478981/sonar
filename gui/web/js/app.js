@@ -908,7 +908,7 @@ async function captureToEntry(r) {
     combo: w >= 0 ? (ST.active[w] || '') : '',
     fsmId: fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, chargePower: 0, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -956,7 +956,7 @@ async function addWemRecord(r) {
     name: wemSeq(r) || wemBank(r) || ('media ' + media), weaponType: w, combo,
     media: media, bank: r.bank || '', fsmId: -1, fsmTarget: -1, group: '', stop: false,
     lmt: [], lmtAny: false,   // 不限不勾选：wem 条目可以填 LMT 作为附加条件
-    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, chargePower: 0, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };
@@ -1196,7 +1196,7 @@ function blankEntry() {
   return { name: '', weaponType: w0 >= 0 ? w0 : -1,
     combo: (w0 >= 0) ? (ST.active[w0] || '') : '',
     fsmId: -1, fsmTarget: -1, group: '', stop: false, lmt: [], lmtAny: true,
-    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, chargePower: 0, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [] };
 }
@@ -1283,11 +1283,12 @@ function fillEditor() {
     const isHammer = (e.weaponType === 4);
     // 蓄力派生：
     //   大剑 = 85/86/102（普通/强/真蓄力的动作号，实测）
-    //   大锤 = 普通蓄力（只看段数，不收 FSM） / 超蓄力（实测 FSM 126）
-    const known = isGs ? ['85', '86', '102'] : (isHammer ? ['seg', '126'] : []);
+    //   大锤 = 普通蓄力 / 超蓄力。注意大锤的超蓄力**没有独立动作**，它是"普通蓄力动作 + 前置 FSM 126"，
+    //          所以这里写的是 ChargePower（1=只普通、2=只超蓄力），不是 FSM 过滤。
+    const known = isGs ? ['85', '86', '102'] : (isHammer ? ['1', '2'] : []);
     const labels = isGs
       ? ['蓄力（FSM 85）', '强蓄力（FSM 86）', '真蓄力（FSM 102）']
-      : ['普通蓄力（只看段数）', '超蓄力（FSM 126）'];
+      : ['普通蓄力（不含超蓄力）', '超蓄力（限制 FSM 126 前置）'];
     const showDeriv = () => { if (derivRow) derivRow.hidden = !isChargeWeapon || !(e.chargeLevel > 0); };
     if (derivSel && derivRow) {
       const sig = known.join(',');
@@ -1316,27 +1317,35 @@ function fillEditor() {
       cutBox.onchange = () => { e.chargeCut = cutBox.checked; };
     }
     if (derivSel) {
-      // cur：大剑 = FSM 85/86/102；大锤 = '126'（超蓄力）或 'seg'（普通蓄力：FSM 不限、只看段数）
+      // cur：大剑 = FSM 85/86/102；大锤 = ChargePower 1/2
       let cur = '';
-      if (e.chargeLevel > 0 && (!e.lmt || !e.lmt.length)) {
+      if (e.chargeLevel > 0) {
         if (isHammer) {
-          if (e.fsmId === 126) cur = '126';
-          else if (!(e.fsmId >= 0)) cur = 'seg';
-        } else if (known.indexOf(String(e.fsmId)) >= 0) {
-          cur = String(e.fsmId);
+          if (e.chargePower === 1) cur = '1';
+          else if (e.chargePower === 2) cur = '2';
+        } else if (!e.lmt || !e.lmt.length) {
+          if (known.indexOf(String(e.fsmId)) >= 0) cur = String(e.fsmId);
         }
       }
       derivSel.value = cur;
       derivSel.onchange = () => {
         const raw = derivSel.value;
-        let v = -1;
-        if (raw === 'seg') v = -1;                       // 普通蓄力：不加动作过滤，只按段数
-        else if (raw) v = parseInt(raw, 10);
-        e.fsmId = v;
-        e.lmt = []; e.lmtAny = true;
         const fi = document.querySelector('#edFsm');
         const li = document.querySelector('#edLmt');
         const la = document.querySelector('#edLmtAny');
+        if (isHammer) {
+          // 大锤：只记 ChargePower，不动 FSM / LMT（超蓄力靠插件判前置 126）
+          e.chargePower = raw ? (parseInt(raw, 10) || 0) : 0;
+          e.fsmId = -1; e.lmt = []; e.lmtAny = true;
+          if (fi) fi.value = -1;
+          if (li) li.value = '';
+          if (la) la.checked = true;
+          lmtHint();
+          return;
+        }
+        const v = raw ? parseInt(raw, 10) : -1;
+        e.fsmId = v;
+        e.lmt = []; e.lmtAny = true;
         if (fi) fi.value = v;
         if (li) li.value = '';
         if (la) la.checked = true;
@@ -1897,7 +1906,7 @@ async function addFsmToCombo(row) {
     name: row.name || ('fsm ' + row.fsm), weaponType: row.weapon, combo,
     fsmId: row.fsm, fsmTarget: -1, group: '', stop: false,
     lmt: lmt > 0 ? [lmt] : [], lmtAny: lmt <= 0,
-    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
+    def: [], extras: [], gauge: [[], [], [], []], charge: [[], [], [], []], chargeLevel: 0, chargeCut: false, chargePower: 0, gaugeRise: 0, enabled: true, prevFsm: -1, prevLmt: -1,
     checkDelayMs: 0, checkTimeoutMs: 0, checkOffsetMs: 150, endOnAction: false,
     checkMode: 0, judgePreset: 0, conds: [],
   };

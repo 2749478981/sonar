@@ -864,10 +864,13 @@ td .enbox{width:15px; height:15px; margin:0 7px 0 0; vertical-align:middle; curs
 .bankempty button.primary{margin-top:4px; padding:9px 22px}
 .bankwork{display:flex; flex-direction:column; gap:7px; flex:1; min-height:0}
 
-/* 底部播放条：试听时出现，占一行布局（不再浮在内容上，绝不会挡住列表最后一行） */
-.pvbar{flex:none; display:flex; align-items:center; gap:10px; padding:8px 12px;
+/* 底部播放条：浮在面板上方，不占布局、不挤压任何容器（.app 是 position:relative）。
+   为了不永久挡住最后一行，可见时给可滚动区域加 scroll-padding-bottom：滚动到底时最后一行会停在条上面。 */
+.pvbar{position:absolute; left:12px; right:12px; bottom:12px; z-index:70;
+       flex:none; display:flex; align-items:center; gap:10px; padding:8px 12px;
        background:var(--panel); border:var(--bw) solid var(--line-2);
-       border-radius:12px; box-shadow:0 8px 26px rgba(0,0,0,.18)}
+       border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.22)}
+body.pvon .tablewrap, body.pvon .banktable, body.pvon .rail-scroll{scroll-padding-bottom:64px}
 .pvbar[hidden]{display:none !important}
 .pvbar .pvicon{flex:none; width:16px; text-align:center; color:var(--accent); font-weight:800}
 .pvbar .pvname{flex:none; max-width:34vw; overflow:hidden; text-overflow:ellipsis;

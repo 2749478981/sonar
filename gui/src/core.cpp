@@ -1698,6 +1698,7 @@ JVal EntryToJson(const SoundEntry& e, int index) {
     v.set("prevLmt", JVal(e.prevLmt));
     v.set("chargeLevel", JVal(e.chargeLevel));
     v.set("chargeCut", JVal(e.chargeCut));
+    v.set("chargePower", JVal(e.chargePower));
     v.set("gaugeRise", JVal(e.gaugeRise));
 
     JVal lmt = JVal::arr();
@@ -1762,6 +1763,7 @@ SoundEntry EntryFromJson(const JVal& v, const std::vector<std::string>& allowedC
     e.chargeLevel = v.optInt("chargeLevel", 0);
     if (e.chargeLevel < 0 || e.chargeLevel > 3) e.chargeLevel = 0;
     e.chargeCut = v.optBool("chargeCut", false);
+    e.chargePower = v.optInt("chargePower", 0); if (e.chargePower < 0 || e.chargePower > 2) e.chargePower = 0;
     e.gaugeRise = v.optInt("gaugeRise", 0);
     if (e.gaugeRise < 0 || e.gaugeRise > 3) e.gaugeRise = 0;
     e.fsmId = v.optInt("fsmId", -1);
@@ -1918,6 +1920,7 @@ std::string EntryKey(const SoundEntry& e) {
                     std::to_string(e.media) + "|";
     for (std::size_t i = 0; i < e.lmt.size(); ++i) k += std::to_string(e.lmt[i]) + ",";
     k += "|c" + std::to_string(e.chargeLevel) + (e.chargeCut ? "x" : "-");
+    k += "|pw" + std::to_string(e.chargePower);
     k += "|r" + std::to_string(e.gaugeRise);
     k += "|p" + std::to_string(e.prevFsm) + "," + std::to_string(e.prevLmt);
     k += "|g" + e.group + (e.stop ? "|S" : "|-");
@@ -4962,6 +4965,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 // ★ 蓄力条目必须按「蓄力段 + 是否被打断」分开：LMT 都是"不限"时，
                 //   1/2/3 段若不进键，合并会把它们并成一条、检查又会误报"重复条件"。
                 k += "|c" + std::to_string(e.chargeLevel) + (e.chargeCut ? "x" : "-");
+    k += "|pw" + std::to_string(e.chargePower);
                 // ★ 刃级升段条目同理：白/黄/红刃各是一条，不能并成一条
                 k += "|r" + std::to_string(e.gaugeRise);
                 // Stop 与普通条目语义不同；Group 不同则"整招只响一次"的范围也不同，都不能并
@@ -5046,6 +5050,7 @@ std::string Core::Handle(const std::string& method, const std::string& paramsJso
                 // ★ 蓄力条目必须按「蓄力段 + 是否被打断」分开：LMT 都是"不限"时，
                 //   1/2/3 段若不进键，合并会把它们并成一条、检查又会误报"重复条件"。
                 k += "|c" + std::to_string(e.chargeLevel) + (e.chargeCut ? "x" : "-");
+    k += "|pw" + std::to_string(e.chargePower);
                 // ★ 刃级升段条目同理：白/黄/红刃各是一条，不能并成一条
                 k += "|r" + std::to_string(e.gaugeRise);
                 // Stop 与普通条目语义不同；Group 不同则"整招只响一次"的范围也不同，都不能并

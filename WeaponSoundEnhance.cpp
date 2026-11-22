@@ -186,11 +186,17 @@ inline std::string ToUtf8(const std::wstring& w)
 // ===========================================================================
 //  Player live state (refreshed by the polling thread)
 // ===========================================================================
+// 大锤「超蓄力」没有独立动作：它是普通蓄力动作 + 前置 FSM 126，
+//   而且 126 只持续一小段 → 判"这次蓄力是不是超蓄力"看当前 fsm 或刚过去的 fsm。
+constexpr std::int32_t kHammerPowerFsm = 126;
+
 namespace player {
 
 std::uintptr_t gRoot = 0x1450139A0ULL;   // ini override-able
 std::int32_t   gLmt = -1;
 std::int32_t   gFsm = -1;
+std::int32_t   gFsmPrev = -1;           // 上一段动作（大锤判超蓄力用：126 = 超蓄力派生）
+std::uint32_t  gFsmPrevMs = 0;          // 变成上一段动作的时刻（GetTickCount64）
 std::int32_t   gWeapon = -1;
 std::int32_t   gWeaponId = -1;
 std::int32_t   gGauge = -1;              // long-sword spirit gauge level 0..3, -1 unknown
@@ -290,7 +296,16 @@ void Refresh()
     if (!entity) return;
 
     gEntity = entity;   // 暴露给 layer 探针（定位装瓶/平射所在的 layer 字段）
-    gFsm       = mem::ReadI32(entity + 0x6278, -1);
+    {
+        // 记录"上一段动作"：大锤的超蓄力 ＝ 普通蓄力动作 + 前置 FSM 126，
+        // 所以判"这次蓄力是普通还是超蓄力"要看当前 fsm 或刚刚过去的 fsm 是不是 126。
+        const std::int32_t f = mem::ReadI32(entity + 0x6278, -1);
+        if (f != gFsm) {
+            gFsmPrev = gFsm;
+            gFsmPrevMs = (std::uint32_t)::GetTickCount64();
+        }
+        gFsm = f;
+    }
     // 场景 / 任务（MHW_Memory_Map_Skill.md §3）
     std::uintptr_t mapPtr = 0;
     gMapId = -1;
@@ -932,6 +947,7 @@ bool WemIsIgnored(long long media) {
 }
 std::uint32_t gGaugePtrOff = 0x76B0;
 std::uint32_t gGaugeValOff = 0x2370;
+std::uint32_t gChargePowerWindowMs = 900;   // 大锤超蓄力（FSM 126）的"前置窗口"：126 过去多久内还算超蓄力
 std::uint32_t gChargeValOff = 0x2358;          // 大剑蓄力等级（与刃级共用 GaugePtrOff）
 std::uint32_t gChargeValOffHammer = 0x235C;    // 大锤蓄力等级（+0x2358 在大锤上是进度 float）
 int           gChargeProbe  = -1;              // ChargeProbe=<武器号>：把 0x2300..0x23C0 的候选值打进日志，-1=关
@@ -1263,6 +1279,9 @@ struct Attack
     //   仍然受 Weapon/FSM/LMT 过滤，所以能用派生进度（哪一招、哪个过渡）再细分。
     //   0 = 不是蓄力条目（普通条目，行为与旧版一致）。
     int chargeLevel = 0;
+    // 蓄力类型：0=不限（普通/超蓄力都响），1=只普通蓄力，2=只超蓄力（大锤用；大剑没有这个概念）
+    int chargePower = 0;
+    bool chargePowerSeen = false;   // 本次蓄力里是否已经见过"超蓄力"状态
     bool chargeCut = false;       // ChargeCut=1：本段响时，先把上一段（正在播）的蓄力音效停掉
     bool chargeLatched = false;   // 本段是否已经在这次蓄力里响过（归零/降段时清）
     Pool defPool;                 // default pool (tag = "any")
@@ -2078,6 +2097,7 @@ void LoadConfig()
                 if (key == "PlayerRoot")  gPlayerRoot = ParseHex(val);
                 else if (key == "PollMs") { int v = std::atoi(val.c_str()); if (v >= 5) gPollMs = v; }
                 else if (key == "DebounceMs") { int v = std::atoi(val.c_str()); if (v >= 0) gDebounceMs = v; }
+        else if (key == "ChargePowerWindowMs") { int v = std::atoi(val.c_str()); if (v >= 0) gChargePowerWindowMs = (std::uint32_t)v; }
                 else if (key == "KillSettleMs") { int v = std::atoi(val.c_str()); if (v >= 0 && v <= 60000) gKillSettleMs = v; }
                 else if (key == "WemBurstCap") { int v = std::atoi(val.c_str()); if (v >= 0 && v <= 1000) gWemBurstCap = v; }
                 else if (key == "WemLoopFilter") gWemLoopFilter = std::atoi(val.c_str()) != 0;
@@ -2240,6 +2260,16 @@ void LoadConfig()
         } else if (key == "ChargeLevel") {
             const int cl = std::atoi(val.c_str());   // 0=不是蓄力条目；1..3=负责第 N 段
             cur.chargeLevel = (cl >= 1 && cl <= 3) ? cl : 0;
+        } else if (key == "ChargePower") {
+            // 0/空=不限；1=只普通蓄力；2=只超蓄力（大锤：普通蓄力动作 + 前置 FSM 126）
+            const std::string cp = ToLower(Trim(val));
+            int v = std::atoi(cp.c_str());
+            if (v < 0 || v > 2) {
+                if (cp == "normal") v = 1;
+                else if (cp == "power") v = 2;
+                else v = 0;
+            }
+            cur.chargePower = v;
         } else if (key == "GaugeRise") {
             // 1=白刃 2=黄刃 3=红刃；写 none/white/yellow/red 也认
             const std::string g = ToLower(Trim(val));
@@ -3499,9 +3529,21 @@ DWORD WINAPI WorkerProc(LPVOID)
                 //   同时仍受 Weapon/FSM/LMT 过滤 → 可以再按派生进度细分
                 //   （同一段在不同招式/过渡里配不同音效）。
                 if (e.chargeLevel > 0) {
-                    if (!matchBase) { e.chargeLatched = false; continue; }
+                    if (!matchBase) { e.chargeLatched = false; e.chargePowerSeen = false; continue; }
                     const int cc = player::gCharge;   // 0..3，-1=读不到
+                    // 这次蓄力是"普通蓄力"还是"超蓄力"？
+                    //   大锤的超蓄力不是独立动作：它是"普通蓄力动作 + 前置 FSM 126"，
+                    //   而且 126 只持续一小段，所以当前 fsm 或刚刚过去的 fsm 是 126 都算超蓄力。
+                    const bool powerNow =
+                        (player::gFsm == kHammerPowerFsm) ||
+                        (player::gFsmPrev == kHammerPowerFsm &&
+                         (std::uint32_t)::GetTickCount64() - player::gFsmPrevMs <= gChargePowerWindowMs);
+                    // 超蓄力开始的瞬间（已经在满段的情况下）让超蓄力条目补响一次
+                    if (powerNow && !e.chargePowerSeen) { e.chargePowerSeen = true; e.chargeLatched = false; }
+                    if (!powerNow) e.chargePowerSeen = false;
                     if (cc < e.chargeLevel) { e.chargeLatched = false; continue; }  // 还没蓄到/已归零 → 解锁
+                    if (e.chargePower == 2 && !powerNow) continue;   // 超蓄力条目：只在超蓄力时响
+                    if (e.chargePower == 1 && powerNow) { e.chargeLatched = true; continue; }  // 普通蓄力条目：超蓄力不响
                     if (cc >= e.chargeLevel && !e.chargeLatched) {
                         if (e.chargeCut) audio::StopAll();   // 被下一段蓄力打断：先停上一段
                         e.chargeLatched = true;
