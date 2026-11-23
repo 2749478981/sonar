@@ -971,6 +971,7 @@ bool WemIsIgnored(long long media) {
 }
 std::uint32_t gGaugePtrOff = 0x76B0;
 std::uint32_t gGaugeValOff = 0x2370;
+std::uint32_t gChargePowerMinMs = 380;   // 超蓄力每一段至少要持续这么久才算"蓄到该段"（防 3 段接超蓄力误判）
 std::uint32_t gChargePowerWindowMs = 6000;   // 大锤超蓄力（FSM 126）的"前置窗口"：126 过去多久内还算超蓄力
 std::uint32_t gChargeValOff = 0x2358;          // 大剑蓄力等级（与刃级共用 GaugePtrOff）
 std::uint32_t gChargeValOffHammer = 0x235C;    // 大锤蓄力等级（+0x2358 在大锤上是进度 float）
@@ -2122,6 +2123,7 @@ void LoadConfig()
                 else if (key == "PollMs") { int v = std::atoi(val.c_str()); if (v >= 5) gPollMs = v; }
                 else if (key == "DebounceMs") { int v = std::atoi(val.c_str()); if (v >= 0) gDebounceMs = v; }
         else if (key == "ChargePowerWindowMs") { int v = std::atoi(val.c_str()); if (v >= 0) gChargePowerWindowMs = (std::uint32_t)v; }
+        else if (key == "ChargePowerMinMs") { int v = std::atoi(val.c_str()); if (v >= 0 && v <= 5000) gChargePowerMinMs = (std::uint32_t)v; }
                 else if (key == "KillSettleMs") { int v = std::atoi(val.c_str()); if (v >= 0 && v <= 60000) gKillSettleMs = v; }
                 else if (key == "WemBurstCap") { int v = std::atoi(val.c_str()); if (v >= 0 && v <= 1000) gWemBurstCap = v; }
                 else if (key == "WemLoopFilter") gWemLoopFilter = std::atoi(val.c_str()) != 0;
@@ -3378,6 +3380,8 @@ DWORD WINAPI WorkerProc(LPVOID)
         static bool sPowerPending = false;   // 见过 126，等下一次蓄力
         static bool sPowerActive = false;    // 本次蓄力序列是超蓄力
         static std::uint32_t sPowerSeenMs = 0;
+        static std::uint32_t sPowerStartMs = 0;   // 超蓄力序列开始（真正切到 active）的时刻
+        std::uint32_t powerElapsedMs = 0;         // 超蓄力已经持续多久（供条目做"必须蓄够时间"判定）
         {
             const std::uint32_t nowPow = static_cast<std::uint32_t>(::GetTickCount64());
             const bool inPowerFsm = (player::gFsm == kHammerPowerFsm);
@@ -3386,7 +3390,7 @@ DWORD WINAPI WorkerProc(LPVOID)
                  nowPow - player::gFsmPrevMs <= gChargePowerWindowMs);
             const int ccNow = player::gCharge;
             if (weapon != 4) {
-                sPowerPending = false; sPowerActive = false; sPowerSeenMs = 0;
+                sPowerPending = false; sPowerActive = false; sPowerSeenMs = 0; sPowerStartMs = 0;
             } else {
                 if (inPowerFsm || justLeft126) { sPowerPending = true; sPowerSeenMs = nowPow; }
                 if (ccNow >= 1) {
@@ -3398,6 +3402,9 @@ DWORD WINAPI WorkerProc(LPVOID)
                 } else {
                     sPowerActive = false;   // 蓄力归零 → 序列结束
                 }
+                if (sPowerActive && sPowerStartMs == 0) sPowerStartMs = nowPow;
+                if (!sPowerActive) sPowerStartMs = 0;
+                if (sPowerActive && sPowerStartMs) powerElapsedMs = nowPow - sPowerStartMs;
             }
         }
 
@@ -3591,11 +3598,17 @@ DWORD WINAPI WorkerProc(LPVOID)
                     //   大锤的超蓄力不是独立动作：它是"普通蓄力动作 + 前置 FSM 126"，
                     //   而且 126 只持续一小段，所以当前 fsm 或刚刚过去的 fsm 是 126 都算超蓄力。
                     const bool powerNow = sPowerActive;
+                    // 蓄力中按超蓄力时，蓄力段本身不会重来（还是 3 段），但"超蓄力3"
+                    // 其实还没蓄够——超蓄力不可能一按就到 3 级。所以超蓄力条目必须
+                    // 满足"超蓄力已持续 chargeLevel * ChargePowerMinMs 毫秒"，否则不响。
+                    const std::uint32_t powerNeedMs =
+                        (std::uint32_t)e.chargeLevel * gChargePowerMinMs;
+                    const bool powerReady = powerNow && powerElapsedMs >= powerNeedMs;
                     // 超蓄力开始的瞬间（已经在满段的情况下）让超蓄力条目补响一次
                     if (powerNow && !e.chargePowerSeen) { e.chargePowerSeen = true; e.chargeLatched = false; }
                     if (!powerNow) e.chargePowerSeen = false;
                     if (cc < e.chargeLevel) { e.chargeLatched = false; continue; }  // 还没蓄到/已归零 → 解锁
-                    if (e.chargePower == 2 && !powerNow) continue;   // 超蓄力条目：只在超蓄力时响
+                    if (e.chargePower == 2 && !powerReady) continue;   // 超蓄力条目：只在超蓄力蓄够时响
                     if (e.chargePower == 1 && powerNow) { e.chargeLatched = true; continue; }  // 普通蓄力条目：超蓄力不响
                     if (cc >= e.chargeLevel && !e.chargeLatched) {
                         if (e.chargeCut) audio::StopAll();   // 被下一段蓄力打断：先停上一段
