@@ -109,6 +109,9 @@
 蓄力归零 → sPowerActive=false。条目用 ChargePower=1（只普通）/2（只超蓄力）互斥。
 **不许**改成"当前/最近 N ms 有 126 就算超蓄力"——实测必错（窗口一过普通条目又响）。
 
+此外，超蓄力条目还要满足**每段最小蓄力时间**：powerElapsedMs >= chargeLevel * ChargePowerMinMs（默认 380ms）。
+原因：蓄满 3 段那一刻按超蓄力，蓄力段还是 3，一秒内就会误报「超蓄力3」；要求超蓄力已持续够久才认。
+
 ### 6.11 日志截断用 SetEndOfFile，不要 DeleteFileW
 读取端（GUI / 插件自身）以 FILE_SHARE_READ 打开日志，没有 FILE_SHARE_DELETE →
 DeleteFileW 会静默失败，日志一路涨到几 MB（实测 4.5MB 还在涨）。
